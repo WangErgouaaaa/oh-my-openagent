@@ -63,6 +63,30 @@ describe("processMessages", () => {
     )).rejects.toThrow("No fresh assistant response found")
   })
 
+  test("structured output rejects a no-id stale assistant after a user message", async () => {
+    const sessionID = "structured-no-id-stale-history-test"
+    resetMessageCursor(sessionID)
+    const messages = [
+      {
+        info: { role: "user", time: { created: 1 } },
+        parts: [{ type: "text", text: "Old review prompt" }],
+      },
+      {
+        info: { role: "assistant", time: { created: 2 } },
+        parts: [{ type: "text", text: '{"artifact_kind":"thinker_raw_verdict"}' }],
+      },
+    ]
+
+    await expect(processMessages(
+      sessionID,
+      createContext(messages) as never,
+      {
+        baselineMessageKeys: new Set(["t:1:0", "t:2:1"]),
+        expectedArtifactKind: "thinker_raw_verdict",
+      },
+    )).rejects.toThrow("No fresh assistant response found")
+  })
+
   test("structured output rejects a non-matching JSON artifact", async () => {
     const sessionID = "structured-invalid-artifact-test"
     resetMessageCursor(sessionID)

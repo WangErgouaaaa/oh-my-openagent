@@ -51,9 +51,14 @@ export async function processMessages(
 
   // Include both assistant messages AND tool messages
   // Tool results (grep, glob, bash output) come from role "tool"
-  const relevantMessages = messages.filter(
-    (m: SDKMessage) => m.info?.role === "assistant" || m.info?.role === "tool"
-  )
+  const relevantMessages = messages
+    .map((message: SDKMessage, index: number) => ({
+      key: buildMessageKey(message, index),
+      message,
+    }))
+    .filter(
+      ({ message }) => message.info?.role === "assistant" || message.info?.role === "tool",
+    )
 
   if (relevantMessages.length === 0) {
     log(`[call_omo_agent] No assistant or tool messages found`)
@@ -64,15 +69,17 @@ export async function processMessages(
   log(`[call_omo_agent] Found ${relevantMessages.length} relevant messages`)
 
   // Sort by time ascending (oldest first) to process messages in order
-  const sortedMessages = [...relevantMessages].sort((a: SDKMessage, b: SDKMessage) => {
-    const timeA = a.info?.time?.created ?? 0
-    const timeB = b.info?.time?.created ?? 0
+  const sortedMessages = [...relevantMessages].sort((a, b) => {
+    const timeA = a.message.info?.time?.created ?? 0
+    const timeB = b.message.info?.time?.created ?? 0
     return timeA - timeB
   })
 
   const newMessages = options.baselineMessageKeys
-    ? sortedMessages.filter((message, index) => !options.baselineMessageKeys?.has(buildMessageKey(message, index)))
-    : consumeNewMessages(sessionID, sortedMessages)
+    ? sortedMessages
+      .filter(({ key }) => !options.baselineMessageKeys?.has(key))
+      .map(({ message }) => message)
+    : consumeNewMessages(sessionID, sortedMessages.map(({ message }) => message))
 
   if (newMessages.length === 0) {
     if (options.expectedArtifactKind) {
