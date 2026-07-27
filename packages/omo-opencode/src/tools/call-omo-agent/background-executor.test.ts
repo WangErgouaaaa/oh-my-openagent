@@ -281,4 +281,42 @@ describe("executeBackground", () => {
     expect(result).toContain("Do NOT call background_output now")
     expect(result).toContain("<system-reminder>")
   })
+
+  test("records a frozen prompt receipt without restoring the polling CTA", async () => {
+    launchMock.mockResolvedValueOnce({
+      id: "test-task-id",
+      sessionId: "ses-frozen-prompt",
+      description: "Test task",
+      agent: "test-agent",
+      status: "pending",
+    })
+    const metadata = mock(() => {})
+
+    const result = await executeBackground(
+      {
+        ...testArgs,
+        prompt_receipt: {
+          source: "file",
+          byteCount: 123,
+          sha256: "a".repeat(64),
+        },
+      },
+      { ...testContext, metadata },
+      mockManager,
+      mockClient,
+    )
+
+    expect(metadata).toHaveBeenCalledWith({
+      title: "Test background task",
+      metadata: {
+        sessionId: "ses-frozen-prompt",
+        promptSource: "file",
+        promptByteCount: 123,
+        promptSha256: "a".repeat(64),
+      },
+    })
+    expect(result).toContain("Prompt source: file")
+    expect(result).toContain("Prompt SHA-256: " + "a".repeat(64))
+    expect(result).not.toContain("Use `background_output`")
+  })
 })

@@ -60,6 +60,30 @@ describe("resolveCallableAgents", () => {
       expect(second).toEqual(["explore", "librarian"])
     })
   })
+
+  describe("#given review-agent invocation is explicitly configured", () => {
+    test("#then review agents stay disabled without opt-in", async () => {
+      const result = await resolveCallableAgents(undefined, undefined, {})
+
+      expect(result).toEqual(["explore", "librarian"])
+    })
+
+    test("#then a truthy opt-in adds only Momus and Oracle", async () => {
+      const result = await resolveCallableAgents(undefined, undefined, {
+        OMO_CALL_OMO_REVIEW_AGENTS: "1",
+      })
+
+      expect(result).toEqual(["explore", "librarian", "momus", "oracle"])
+    })
+
+    test("#then a non-truthy opt-in does not widen the allowlist", async () => {
+      const result = await resolveCallableAgents(undefined, undefined, {
+        OMO_CALL_OMO_REVIEW_AGENTS: "0",
+      })
+
+      expect(result).toEqual(["explore", "librarian"])
+    })
+  })
 })
 
 export {}

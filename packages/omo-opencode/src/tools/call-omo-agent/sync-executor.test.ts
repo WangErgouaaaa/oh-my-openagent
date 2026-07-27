@@ -30,6 +30,7 @@ type ToolContext = {
 
 type Dependencies = {
   createOrGetSession: ReturnType<typeof mock>
+  captureMessageBaseline: ReturnType<typeof mock>
   waitForCompletion: ReturnType<typeof mock>
   processMessages: ReturnType<typeof mock>
   setSessionFallbackChain: ReturnType<typeof mock>
@@ -44,6 +45,7 @@ async function importExecuteSync(): Promise<ExecuteSync> {
 function createDependencies(overrides?: Partial<Dependencies>): Dependencies {
   return {
     createOrGetSession: mock(async () => ({ sessionID: "ses-test-123", isNew: true })),
+    captureMessageBaseline: mock(async () => new Set()),
     waitForCompletion: mock(async () => {}),
     processMessages: mock(async () => "agent response"),
     setSessionFallbackChain: mock(() => {}),
@@ -221,6 +223,11 @@ describe("executeSync", () => {
       subagent_type: "librarian",
       description: "search docs",
       prompt: "find docs",
+      prompt_receipt: {
+        source: "file" as const,
+        byteCount: 123,
+        sha256: "a".repeat(64),
+      },
       run_in_background: false,
     }
 
@@ -231,11 +238,24 @@ describe("executeSync", () => {
     expect(result).toContain("final answer")
     expect(result).toContain("<task_metadata>")
     expect(result).toContain("session_id: ses-test-456")
+    expect(result).toContain("prompt_source: file")
+    expect(result).toContain("prompt_bytes: 123")
+    expect(result).toContain(`prompt_sha256: ${"a".repeat(64)}`)
     expect(result).toContain("</task_metadata>")
+    expect(toolContext.metadata).toHaveBeenCalledWith({
+      title: "search docs",
+      metadata: {
+        sessionId: "ses-test-456",
+        promptSource: "file",
+        promptByteCount: 123,
+        promptSha256: "a".repeat(64),
+      },
+    })
     expect(deps.waitForCompletion).toHaveBeenCalledWith(
       "ses-test-456",
       toolContext,
-      expect.objectContaining({ client: expect.anything() })
+      expect.objectContaining({ client: expect.anything() }),
+      expect.objectContaining({ baselineMessageKeys: expect.any(Set) }),
     )
   })
 
@@ -312,6 +332,47 @@ describe("executeSync", () => {
       title: "metadata title",
       metadata: { sessionId: "ses-metadata" },
     })
+  })
+
+  test("captures the reused session baseline before dispatching the prompt", async () => {
+    const executeSync = await importExecuteSync()
+    const events: string[] = []
+    const baselineMessageKeys = new Set(["id:old-assistant"])
+    const deps = createDependencies({
+      captureMessageBaseline: mock(async () => {
+        events.push("baseline")
+        return baselineMessageKeys
+      }),
+      waitForCompletion: mock(async (_sessionID, _toolContext, _ctx, options) => {
+        events.push("wait")
+        expect(options?.baselineMessageKeys).toBe(baselineMessageKeys)
+      }),
+      processMessages: mock(async (_sessionID, _ctx, options) => {
+        events.push("process")
+        expect(options?.baselineMessageKeys).toBe(baselineMessageKeys)
+        return "fresh response"
+      }),
+    })
+    const toolContext = createToolContext()
+    const recorder = createPromptAsyncRecorder(async () => {
+      events.push("prompt")
+      return { data: {} }
+    })
+
+    await executeSync(
+      {
+        subagent_type: "explore",
+        description: "reuse session",
+        prompt: "collect fresh evidence",
+        run_in_background: false,
+        session_id: "ses-reused",
+      },
+      toolContext,
+      createContext(recorder.promptAsync) as never,
+      deps,
+    )
+
+    expect(events).toEqual(["baseline", "prompt", "wait", "process"])
   })
 
   test("applies fallback chain to sync sessions before completion polling", async () => {
@@ -510,6 +571,7 @@ describe("executeSync", () => {
       "ses-ambiguous-prompt",
       toolContext,
       expect.objectContaining({ client: expect.anything() }),
+      expect.objectContaining({ baselineMessageKeys: expect.any(Set) }),
     )
     expect(deps.processMessages).toHaveBeenCalledTimes(1)
   })

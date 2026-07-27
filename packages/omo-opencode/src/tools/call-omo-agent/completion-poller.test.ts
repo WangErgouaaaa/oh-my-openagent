@@ -102,4 +102,84 @@ describe("waitForCompletion", () => {
       globalThis.setTimeout = originalSetTimeout
     }
   })
+
+  test("#given a reused session only has messages from before this prompt #when it stays idle #then it fails instead of accepting a stale verdict", async () => {
+    // given
+    const originalDateNow = Date.now
+    const originalSetTimeout = globalThis.setTimeout
+    let currentTime = 0
+    Date.now = () => {
+      currentTime += 10_000
+      return currentTime
+    }
+    globalThis.setTimeout = ((handler: TimerHandler) => {
+      if (typeof handler === "function") {
+        handler()
+      }
+      return originalSetTimeout(() => {}, 0)
+    }) as typeof globalThis.setTimeout
+
+    const status = mock(async () => ({ data: { "ses-reused": { type: "idle" } } }))
+    const messages = mock(async () => ({
+      data: [
+        { info: { id: "old-user", role: "user" } },
+        { info: { id: "old-assistant", role: "assistant" } },
+      ],
+    }))
+
+    try {
+      // when
+      const result = waitForCompletion(
+        "ses-reused",
+        createToolContext(),
+        createContext({ status, messages }),
+        {
+          baselineMessageKeys: new Set(["id:old-user", "id:old-assistant"]),
+        } as never,
+      )
+
+      // then
+      await expect(result).rejects.toThrow("Prompt was not durably accepted by OpenCode")
+    } finally {
+      Date.now = originalDateNow
+      globalThis.setTimeout = originalSetTimeout
+    }
+  })
+
+  test("#given a ten-minute timeout #when the child stays active #then it reports ten minutes", async () => {
+    // given
+    const originalDateNow = Date.now
+    const originalSetTimeout = globalThis.setTimeout
+    let currentTime = 0
+    Date.now = () => {
+      currentTime += 60_000
+      return currentTime
+    }
+    globalThis.setTimeout = ((handler: TimerHandler) => {
+      if (typeof handler === "function") {
+        handler()
+      }
+      return originalSetTimeout(() => {}, 0)
+    }) as typeof globalThis.setTimeout
+
+    const status = mock(async () => ({ data: { "ses-timeout": { type: "busy" } } }))
+    const messages = mock(async () => ({ data: [] }))
+
+    try {
+      // when
+      const result = waitForCompletion(
+        "ses-timeout",
+        createToolContext(),
+        createContext({ status, messages }),
+        { maxPollTimeMs: 10 * 60 * 1000 },
+      )
+
+      // then
+      await expect(result).rejects.toThrow("Agent task timed out after 10 minutes.")
+      expect(messages).not.toHaveBeenCalled()
+    } finally {
+      Date.now = originalDateNow
+      globalThis.setTimeout = originalSetTimeout
+    }
+  })
 })

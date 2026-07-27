@@ -11,10 +11,10 @@ import type { FallbackEntry } from "../../shared/model-requirements"
 import type { DelegatedModelConfig } from "../../shared/model-resolution-types"
 import { applySessionPromptParams } from "../../shared/session-prompt-params-helpers"
 import { deleteSessionTools, setSessionTools } from "../../shared/session-tools-store"
-import { waitForCompletion } from "./completion-poller"
+import { captureMessageBaseline, waitForCompletion } from "./completion-poller"
 import { processMessages } from "./message-processor"
 import { createOrGetSession } from "./session-creator"
-import type { CallOmoAgentArgs } from "./types"
+import type { CallOmoAgentArgs, StructuredReviewResponseMode } from "./types"
 
 type SessionWithPrompt = {
   prompt: (opts: { path: { id: string }; body: Record<string, unknown> }) => Promise<unknown>
@@ -26,6 +26,7 @@ function hasPrompt(session: PluginInput["client"]["session"]): session is Plugin
 
 type ExecuteSyncDeps = {
   createOrGetSession: typeof createOrGetSession
+  captureMessageBaseline: typeof captureMessageBaseline
   waitForCompletion: typeof waitForCompletion
   processMessages: typeof processMessages
   setSessionFallbackChain: (sessionID: string, fallbackChain: FallbackEntry[] | undefined) => void
@@ -39,6 +40,7 @@ type SpawnReservation = {
 
 const defaultDeps: ExecuteSyncDeps = {
   createOrGetSession,
+  captureMessageBaseline,
   waitForCompletion,
   processMessages,
   setSessionFallbackChain: () => {},
@@ -71,6 +73,57 @@ function buildSyncPromptTools(agent: string): Record<string, boolean> {
   }
 }
 
+const STRUCTURED_REVIEW_PROTOCOLS: Record<StructuredReviewResponseMode, {
+  allowedAgents: readonly string[]
+  expectedArtifactKind: "thinker_raw_verdict" | "thinker_raw_verdict_v21"
+}> = {
+  thinker_v2: {
+    allowedAgents: ["momus", "oracle"],
+    expectedArtifactKind: "thinker_raw_verdict",
+  },
+  thinker_v21: {
+    allowedAgents: ["explore", "momus", "oracle"],
+    expectedArtifactKind: "thinker_raw_verdict_v21",
+  },
+}
+
+function resolveStructuredReviewProtocol(args: CallOmoAgentArgs) {
+  if (!args.response_mode) {
+    return undefined
+  }
+  const protocol = STRUCTURED_REVIEW_PROTOCOLS[args.response_mode]
+  if (!protocol.allowedAgents.includes(args.subagent_type.toLowerCase())) {
+    throw new Error(
+      `response_mode ${args.response_mode} is only supported by ${protocol.allowedAgents.join(", ")}.`,
+    )
+  }
+  return protocol
+}
+
+function promptReceiptMetadata(args: CallOmoAgentArgs): Record<string, unknown> {
+  if (!args.prompt_receipt) {
+    return {}
+  }
+  return {
+    promptSource: args.prompt_receipt.source,
+    promptByteCount: args.prompt_receipt.byteCount,
+    promptSha256: args.prompt_receipt.sha256,
+  }
+}
+
+function taskMetadata(sessionID: string, args: CallOmoAgentArgs): string {
+  const lines = ["<task_metadata>", `session_id: ${sessionID}`]
+  if (args.prompt_receipt) {
+    lines.push(
+      `prompt_source: ${args.prompt_receipt.source}`,
+      `prompt_bytes: ${args.prompt_receipt.byteCount}`,
+      `prompt_sha256: ${args.prompt_receipt.sha256}`,
+    )
+  }
+  lines.push("</task_metadata>")
+  return lines.join("\n")
+}
+
 export async function executeSync(
   args: CallOmoAgentArgs,
   toolContext: {
@@ -89,8 +142,10 @@ export async function executeSync(
   let sessionID: string | undefined
   let createdSessionForExecution = false
   let appliedFallbackChain = false
+  let baselineMessageKeys: ReadonlySet<string> = new Set()
 
   try {
+    const structuredReviewProtocol = resolveStructuredReviewProtocol(args)
     const session = await deps.createOrGetSession(args, toolContext, ctx, model)
     sessionID = session.sessionID
     createdSessionForExecution = session.isNew
@@ -112,7 +167,10 @@ export async function executeSync(
     await Promise.resolve(
       toolContext.metadata?.({
         title: args.description,
-        metadata: { sessionId: sessionID },
+        metadata: {
+          sessionId: sessionID,
+          ...promptReceiptMetadata(args),
+        },
       })
     )
 
@@ -132,9 +190,10 @@ export async function executeSync(
 
     try {
       if (!hasPrompt(ctx.client.session)) {
-        return `Error: Failed to send prompt: prompt is not available on this OpenCode client.\n\n<task_metadata>\nsession_id: ${sessionID}\n</task_metadata>`
+        return `Error: Failed to send prompt: prompt is not available on this OpenCode client.\n\n${taskMetadata(sessionID, args)}`
       }
 
+      baselineMessageKeys = await deps.captureMessageBaseline(sessionID, ctx)
       const promptResult = await dispatchInternalPrompt({
         mode: "sync",
         client: ctx.client,
@@ -173,16 +232,26 @@ export async function executeSync(
       const errorMessage = error instanceof Error ? error.message : String(error)
       log(`[call_omo_agent] Prompt error:`, errorMessage)
       if (errorMessage.includes("agent.name") || errorMessage.includes("undefined")) {
-        return `Error: Agent "${normalizedSubagentType}" not found. Make sure the agent is registered in your opencode.json or provided by a plugin.\n\n<task_metadata>\nsession_id: ${sessionID}\n</task_metadata>`
+        return `Error: Agent "${normalizedSubagentType}" not found. Make sure the agent is registered in your opencode.json or provided by a plugin.\n\n${taskMetadata(sessionID, args)}`
       }
-      return `Error: Failed to send prompt: ${errorMessage}\n\n<task_metadata>\nsession_id: ${sessionID}\n</task_metadata>`
+      return `Error: Failed to send prompt: ${errorMessage}\n\n${taskMetadata(sessionID, args)}`
     }
 
-    await deps.waitForCompletion(sessionID, toolContext, ctx)
+    if (structuredReviewProtocol) {
+      await deps.waitForCompletion(sessionID, toolContext, ctx, {
+        maxPollTimeMs: 10 * 60 * 1000,
+        baselineMessageKeys,
+      })
+    } else {
+      await deps.waitForCompletion(sessionID, toolContext, ctx, { baselineMessageKeys })
+    }
 
-    const responseText = await deps.processMessages(sessionID, ctx)
+    const responseText = await deps.processMessages(sessionID, ctx, {
+      baselineMessageKeys,
+      expectedArtifactKind: structuredReviewProtocol?.expectedArtifactKind,
+    })
 
-    return responseText + "\n\n" + ["<task_metadata>", `session_id: ${sessionID}`, "</task_metadata>"].join("\n")
+    return responseText + "\n\n" + taskMetadata(sessionID, args)
   } catch (error) {
     spawnReservation?.rollback()
     throw error
