@@ -96,6 +96,69 @@ describe("call_omo_agent restricted agent set", () => {
     expect(launch).not.toHaveBeenCalled()
   })
 
+  test("#when review agents are explicitly enabled #then call_omo_agent launches oracle", async () => {
+    //#given
+    clearCallableAgentsCache()
+    const pluginInput = createPluginInput([
+      { name: "explore", mode: "subagent" },
+      { name: "librarian", mode: "subagent" },
+      { name: "oracle", mode: "subagent" },
+    ])
+    const { manager, launch } = createBackgroundManager()
+    const toolDefinition = createCallOmoAgent(
+      pluginInput,
+      manager,
+      [],
+      undefined,
+      undefined,
+      undefined,
+      { env: { OMO_CALL_OMO_REVIEW_AGENTS: "1" } },
+    )
+
+    //#when
+    const result = await toolDefinition.execute(
+      { description: "Review", prompt: "Review this", subagent_type: "oracle", run_in_background: true },
+      toolContext,
+    )
+
+    //#then
+    expect(result).not.toContain("Invalid agent type")
+    expect(launch).toHaveBeenCalledWith(expect.objectContaining({ agent: "oracle" }))
+  })
+
+  test("#when a strict review response is requested in background mode #then it fails closed before launch", async () => {
+    clearCallableAgentsCache()
+    const pluginInput = createPluginInput([
+      { name: "explore", mode: "subagent" },
+      { name: "librarian", mode: "subagent" },
+      { name: "oracle", mode: "subagent" },
+    ])
+    const { manager, launch } = createBackgroundManager()
+    const toolDefinition = createCallOmoAgent(
+      pluginInput,
+      manager,
+      [],
+      undefined,
+      undefined,
+      undefined,
+      { env: { OMO_CALL_OMO_REVIEW_AGENTS: "1" } },
+    )
+
+    const result = await toolDefinition.execute(
+      {
+        description: "Review",
+        prompt: "Review this",
+        response_mode: "thinker_v2",
+        subagent_type: "oracle",
+        run_in_background: true,
+      },
+      toolContext,
+    )
+
+    expect(result).toContain("response_mode is only supported when run_in_background=false")
+    expect(launch).not.toHaveBeenCalled()
+  })
+
   test("#when caller requests explore or librarian #then call_omo_agent still launches them", async () => {
     //#given
     clearCallableAgentsCache()

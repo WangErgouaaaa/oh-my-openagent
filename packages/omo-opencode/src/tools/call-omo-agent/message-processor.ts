@@ -1,15 +1,41 @@
 import type { PluginInput } from "@opencode-ai/plugin"
 import { log } from "../../shared"
-import { consumeNewMessages } from "../../shared/session-cursor"
+import { buildMessageKey, consumeNewMessages } from "../../shared/session-cursor"
 
 interface SDKMessage {
   info?: { role?: string; time?: { created?: number } }
   parts?: Array<{ type: string; text?: string; content?: string | Array<{ type: string; text?: string }> }>
 }
 
+export interface ProcessMessagesOptions {
+  baselineMessageKeys?: ReadonlySet<string>
+  expectedArtifactKind?: "thinker_raw_verdict" | "thinker_raw_verdict_v21"
+}
+
+function validateStructuredReviewResponse(
+  responseText: string,
+  expectedArtifactKind: NonNullable<ProcessMessagesOptions["expectedArtifactKind"]>,
+): void {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(responseText)
+  } catch {
+    throw new Error("Structured reviewer response must be one JSON mapping.")
+  }
+  if (
+    typeof parsed !== "object"
+    || parsed === null
+    || Array.isArray(parsed)
+    || (parsed as { artifact_kind?: unknown }).artifact_kind !== expectedArtifactKind
+  ) {
+    throw new Error(`Structured reviewer response must declare artifact_kind ${expectedArtifactKind}.`)
+  }
+}
+
 export async function processMessages(
   sessionID: string,
-  ctx: PluginInput
+  ctx: PluginInput,
+  options: ProcessMessagesOptions = {},
 ): Promise<string> {
   const messagesResult = await ctx.client.session.messages({
     path: { id: sessionID },
@@ -44,10 +70,37 @@ export async function processMessages(
     return timeA - timeB
   })
 
-  const newMessages = consumeNewMessages(sessionID, sortedMessages)
+  const newMessages = options.baselineMessageKeys
+    ? sortedMessages.filter((message, index) => !options.baselineMessageKeys?.has(buildMessageKey(message, index)))
+    : consumeNewMessages(sessionID, sortedMessages)
 
   if (newMessages.length === 0) {
+    if (options.expectedArtifactKind) {
+      throw new Error("No fresh assistant response found")
+    }
     return "No new output since last check."
+  }
+
+  if (options.expectedArtifactKind) {
+    const finalAssistant = [...newMessages]
+      .reverse()
+      .find((message: SDKMessage) =>
+        message.info?.role === "assistant"
+        && (message.parts ?? []).some((part) => part.type === "text" && Boolean(part.text))
+      )
+
+    if (!finalAssistant) {
+      throw new Error("No final assistant text response found")
+    }
+
+    const responseText = (finalAssistant.parts ?? [])
+      .filter((part) => part.type === "text" && Boolean(part.text))
+      .map((part) => (part as { text: string }).text)
+      .join("")
+
+    log(`[call_omo_agent] Got final assistant response, length: ${responseText.length}`)
+    validateStructuredReviewResponse(responseText, options.expectedArtifactKind)
+    return responseText
   }
 
   // Extract content from ALL messages, not just the last one

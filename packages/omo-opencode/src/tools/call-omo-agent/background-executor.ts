@@ -79,7 +79,14 @@ export async function executeBackground(
 
     await toolContext.metadata?.({
       title: args.description,
-      metadata: { sessionId: sessionId ?? "pending" },
+      metadata: {
+        sessionId: sessionId ?? "pending",
+        ...(args.prompt_receipt ? {
+          promptSource: args.prompt_receipt.source,
+          promptByteCount: args.prompt_receipt.byteCount,
+          promptSha256: args.prompt_receipt.sha256,
+        } : {}),
+      },
     })
 
 		return `Background agent task launched successfully.
@@ -90,7 +97,11 @@ Description: ${task.description}
 Agent: ${task.agent} (subagent)
 Status: ${task.status}
 
-Do NOT call background_output now. Wait for <system-reminder> notification first. The system will deliver the result when the task completes; you do not need to poll for it.`
+${args.prompt_receipt ? `Prompt source: ${args.prompt_receipt.source}
+Prompt bytes: ${args.prompt_receipt.byteCount}
+Prompt SHA-256: ${args.prompt_receipt.sha256}
+
+` : ""}Do NOT call background_output now. Wait for <system-reminder> notification first. The system will deliver the result when the task completes; you do not need to poll for it.`
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     return `Failed to launch background agent task: ${message}`

@@ -43,6 +43,7 @@ function createContext(promptAsync: ReturnType<typeof mock>) {
 function createDependencies(overrides?: Partial<ExecuteSyncDeps>): ExecuteSyncDeps {
   return {
     createOrGetSession: mock(async () => ({ sessionID: "ses-default", isNew: true })),
+    captureMessageBaseline: mock(async () => new Set()),
     waitForCompletion: mock(async () => {}),
     processMessages: mock(async () => "agent response"),
     setSessionFallbackChain: mock(() => {}),

@@ -1,6 +1,30 @@
 import type { PluginInput } from "@opencode-ai/plugin"
 import { log } from "../../shared"
 import { normalizeSDKResponse } from "../../shared"
+import { buildMessageKey, type CursorMessage } from "../../shared/session-cursor"
+
+export interface WaitForCompletionOptions {
+  maxPollTimeMs?: number
+  baselineMessageKeys?: ReadonlySet<string>
+}
+
+type CompletionMessage = CursorMessage & {
+  info?: NonNullable<CursorMessage["info"]> & { role?: string }
+}
+
+export async function captureMessageBaseline(
+  sessionID: string,
+  ctx: PluginInput,
+): Promise<ReadonlySet<string>> {
+  const messagesResult = await ctx.client.session.messages({ path: { id: sessionID } })
+  if (messagesResult.error) {
+    throw new Error(`Failed to get messages: ${messagesResult.error}`)
+  }
+  const messages = normalizeSDKResponse(messagesResult, [] as CompletionMessage[], {
+    preferResponseOnMissingData: true,
+  })
+  return new Set(messages.map((message, index) => buildMessageKey(message, index)))
+}
 
 export async function waitForCompletion(
   sessionID: string,
@@ -11,12 +35,13 @@ export async function waitForCompletion(
     abort: AbortSignal
     metadata?: (input: { title?: string; metadata?: Record<string, unknown> }) => void
   },
-  ctx: PluginInput
+  ctx: PluginInput,
+  options: WaitForCompletionOptions = {},
 ): Promise<void> {
   log(`[call_omo_agent] Polling for completion...`)
 
   const POLL_INTERVAL_MS = 500
-  const MAX_POLL_TIME_MS = 5 * 60 * 1000 // 5 minutes max
+  const MAX_POLL_TIME_MS = options.maxPollTimeMs ?? 5 * 60 * 1000
   const PROMPT_ACCEPTANCE_TIMEOUT_MS = 30 * 1000
   const pollStart = Date.now()
   let lastMsgCount = 0
@@ -44,10 +69,13 @@ export async function waitForCompletion(
     }
 
     const messagesCheck = await ctx.client.session.messages({ path: { id: sessionID } })
-    const msgs = normalizeSDKResponse(messagesCheck, [] as Array<unknown>, {
+    const msgs = normalizeSDKResponse(messagesCheck, [] as CompletionMessage[], {
       preferResponseOnMissingData: true,
     })
-    const currentMsgCount = msgs.length
+    const freshMessages = options.baselineMessageKeys
+      ? msgs.filter((message, index) => !options.baselineMessageKeys?.has(buildMessageKey(message, index)))
+      : msgs
+    const currentMsgCount = freshMessages.length
 
     if (currentMsgCount === 0) {
       stablePolls = 0
@@ -58,7 +86,13 @@ export async function waitForCompletion(
       continue
     }
 
-    if (currentMsgCount > 0 && currentMsgCount === lastMsgCount) {
+    if (!freshMessages.some((message) => message.info?.role === "assistant")) {
+      stablePolls = 0
+      lastMsgCount = currentMsgCount
+      continue
+    }
+
+    if (currentMsgCount === lastMsgCount) {
       stablePolls++
       if (stablePolls >= STABILITY_REQUIRED) {
         log(`[call_omo_agent] Session complete, ${currentMsgCount} messages`)
@@ -72,6 +106,6 @@ export async function waitForCompletion(
 
   if (Date.now() - pollStart >= MAX_POLL_TIME_MS) {
     log(`[call_omo_agent] Timeout reached`)
-    throw new Error("Agent task timed out after 5 minutes.")
+    throw new Error(`Agent task timed out after ${MAX_POLL_TIME_MS / 60_000} minutes.`)
   }
 }
