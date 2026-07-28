@@ -46,6 +46,54 @@ describe("processMessages", () => {
     expect(result).toBe(finalJson)
   })
 
+  test("structured output extracts one JSON mapping from a native agent wrapper", async () => {
+    const sessionID = "structured-native-wrapper-test"
+    resetMessageCursor(sessionID)
+    const finalJson = '{"artifact_kind":"thinker_raw_verdict_v21","role":"explore"}'
+    const messages = [
+      {
+        info: { id: "assistant-final", role: "assistant", parentID: "current-user", time: { created: 1 } },
+        parts: [{
+          type: "text",
+          text: `Review complete.\n\n\`\`\`json\n${finalJson}\n\`\`\`\n\n<results><answer>Supported.</answer></results>`,
+        }],
+      },
+    ]
+
+    const result = await processMessages(
+      sessionID,
+      createContext(messages) as never,
+      {
+        expectedPromptMessageID: "current-user",
+        expectedArtifactKind: "thinker_raw_verdict_v21",
+      },
+    )
+
+    expect(result).toBe(finalJson)
+  })
+
+  test("structured output rejects multiple fenced JSON mappings", async () => {
+    const sessionID = "structured-ambiguous-wrapper-test"
+    resetMessageCursor(sessionID)
+    const finalJson = '{"artifact_kind":"thinker_raw_verdict_v21","role":"explore"}'
+    const messages = [{
+      info: { id: "assistant-final", role: "assistant", parentID: "current-user", time: { created: 1 } },
+      parts: [{
+        type: "text",
+        text: `\`\`\`json\n${finalJson}\n\`\`\`\n\n\`\`\`json\n${finalJson}\n\`\`\``,
+      }],
+    }]
+
+    await expect(processMessages(
+      sessionID,
+      createContext(messages) as never,
+      {
+        expectedPromptMessageID: "current-user",
+        expectedArtifactKind: "thinker_raw_verdict_v21",
+      },
+    )).rejects.toThrow("Structured reviewer response must be one JSON mapping")
+  })
+
   test("structured output rejects a stale assistant history", async () => {
     const sessionID = "structured-stale-history-test"
     resetMessageCursor(sessionID)
