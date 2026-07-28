@@ -3,12 +3,13 @@ import { log } from "../../shared"
 import { buildMessageKey, consumeNewMessages } from "../../shared/session-cursor"
 
 interface SDKMessage {
-  info?: { role?: string; time?: { created?: number } }
+  info?: { id?: string; role?: string; parentID?: string; time?: { created?: number } }
   parts?: Array<{ type: string; text?: string; content?: string | Array<{ type: string; text?: string }> }>
 }
 
 export interface ProcessMessagesOptions {
   baselineMessageKeys?: ReadonlySet<string>
+  expectedPromptMessageID?: string
   expectedArtifactKind?: "thinker_raw_verdict" | "thinker_raw_verdict_v21"
 }
 
@@ -89,15 +90,20 @@ export async function processMessages(
   }
 
   if (options.expectedArtifactKind) {
+    if (!options.expectedPromptMessageID) {
+      throw new Error("Structured reviewer response requires a dispatched prompt message ID.")
+    }
+
     const finalAssistant = [...newMessages]
       .reverse()
       .find((message: SDKMessage) =>
         message.info?.role === "assistant"
+        && message.info.parentID === options.expectedPromptMessageID
         && (message.parts ?? []).some((part) => part.type === "text" && Boolean(part.text))
       )
 
     if (!finalAssistant) {
-      throw new Error("No final assistant text response found")
+      throw new Error("No final assistant response linked to the dispatched prompt found")
     }
 
     const responseText = (finalAssistant.parts ?? [])

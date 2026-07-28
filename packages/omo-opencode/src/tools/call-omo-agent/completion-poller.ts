@@ -6,10 +6,11 @@ import { buildMessageKey, type CursorMessage } from "../../shared/session-cursor
 export interface WaitForCompletionOptions {
   maxPollTimeMs?: number
   baselineMessageKeys?: ReadonlySet<string>
+  expectedPromptMessageID?: string
 }
 
 type CompletionMessage = CursorMessage & {
-  info?: NonNullable<CursorMessage["info"]> & { role?: string }
+  info?: NonNullable<CursorMessage["info"]> & { role?: string; parentID?: string }
 }
 
 export async function captureMessageBaseline(
@@ -75,18 +76,31 @@ export async function waitForCompletion(
     const freshMessages = options.baselineMessageKeys
       ? msgs.filter((message, index) => !options.baselineMessageKeys?.has(buildMessageKey(message, index)))
       : msgs
-    const currentMsgCount = freshMessages.length
+    const promptWasPersisted = options.expectedPromptMessageID
+      ? freshMessages.some((message) =>
+        message.info?.role === "user" && message.info.id === options.expectedPromptMessageID,
+      )
+      : freshMessages.length > 0
+    const matchingAssistantMessages = options.expectedPromptMessageID
+      ? freshMessages.filter((message) =>
+        message.info?.role === "assistant" && message.info.parentID === options.expectedPromptMessageID,
+      )
+      : freshMessages
+    const currentMsgCount = matchingAssistantMessages.length
 
     if (currentMsgCount === 0) {
       stablePolls = 0
       lastMsgCount = 0
-      if (!sawActiveStatus && Date.now() - pollStart >= PROMPT_ACCEPTANCE_TIMEOUT_MS) {
+      if (!promptWasPersisted && !sawActiveStatus && Date.now() - pollStart >= PROMPT_ACCEPTANCE_TIMEOUT_MS) {
         throw new Error(`Prompt was not durably accepted by OpenCode for session ${sessionID}.`)
       }
       continue
     }
 
-    if (!freshMessages.some((message) => message.info?.role === "assistant")) {
+    if (
+      !options.expectedPromptMessageID
+      && !freshMessages.some((message) => message.info?.role === "assistant")
+    ) {
       stablePolls = 0
       lastMsgCount = currentMsgCount
       continue

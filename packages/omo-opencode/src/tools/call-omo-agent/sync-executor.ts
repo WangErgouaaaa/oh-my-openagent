@@ -1,5 +1,6 @@
 import type { PluginInput } from "@opencode-ai/plugin"
 import { clearSessionAgent, handedBackSyncSessions, setSessionAgent, subagentSessions, syncSubagentSessions } from "../../features/claude-code-session-state"
+import { generateMessageId } from "../../features/hook-message-injector/id-generation"
 import { dispatchInternalPrompt, isInternalPromptDispatchAccepted } from "../../hooks/shared/prompt-async-gate"
 import { getAgentToolRestrictions, isAmbiguousPostDispatchPromptFailure, log } from "../../shared"
 import { normalizeAgentForPrompt, stripAgentListSortPrefix } from "../../shared/agent-display-names"
@@ -124,6 +125,21 @@ function taskMetadata(sessionID: string, args: CallOmoAgentArgs): string {
   return lines.join("\n")
 }
 
+function getPromptResponseParentID(response: unknown): string | undefined {
+  const payload = typeof response === "object" && response !== null && "data" in response
+    ? (response as { data?: unknown }).data
+    : response
+  if (typeof payload !== "object" || payload === null || !("info" in payload)) {
+    return undefined
+  }
+  const info = (payload as { info?: unknown }).info
+  if (typeof info !== "object" || info === null || !("parentID" in info)) {
+    return undefined
+  }
+  const parentID = (info as { parentID?: unknown }).parentID
+  return typeof parentID === "string" && parentID.length > 0 ? parentID : undefined
+}
+
 export async function executeSync(
   args: CallOmoAgentArgs,
   toolContext: {
@@ -143,6 +159,7 @@ export async function executeSync(
   let createdSessionForExecution = false
   let appliedFallbackChain = false
   let baselineMessageKeys: ReadonlySet<string> = new Set()
+  let promptMessageID: string | undefined
 
   try {
     const structuredReviewProtocol = resolveStructuredReviewProtocol(args)
@@ -194,6 +211,7 @@ export async function executeSync(
       }
 
       baselineMessageKeys = await deps.captureMessageBaseline(sessionID, ctx)
+      promptMessageID = generateMessageId()
       const promptResult = await dispatchInternalPrompt({
         mode: "sync",
         client: ctx.client,
@@ -204,6 +222,7 @@ export async function executeSync(
         input: {
           path: { id: sessionID },
           body: {
+            messageID: promptMessageID,
             agent: promptAgent,
             tools: promptTools,
             parts: [{ type: "text", text: args.prompt }],
@@ -228,6 +247,13 @@ export async function executeSync(
       if (!promptMayHaveBeenAccepted && !isInternalPromptDispatchAccepted(promptResult)) {
         throw new Error(`prompt skipped by gate: ${promptResult.status}`)
       }
+      if (
+        structuredReviewProtocol
+        && promptResult.status === "dispatched"
+        && getPromptResponseParentID(promptResult.response) !== promptMessageID
+      ) {
+        throw new Error("Structured reviewer prompt response was not linked to the dispatched user message.")
+      }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error)
       log(`[call_omo_agent] Prompt error:`, errorMessage)
@@ -237,17 +263,26 @@ export async function executeSync(
       return `Error: Failed to send prompt: ${errorMessage}\n\n${taskMetadata(sessionID, args)}`
     }
 
+    if (!promptMessageID) {
+      throw new Error("No prompt message ID was created for the synchronous dispatch.")
+    }
+
     if (structuredReviewProtocol) {
       await deps.waitForCompletion(sessionID, toolContext, ctx, {
         maxPollTimeMs: 10 * 60 * 1000,
         baselineMessageKeys,
+        expectedPromptMessageID: promptMessageID,
       })
     } else {
-      await deps.waitForCompletion(sessionID, toolContext, ctx, { baselineMessageKeys })
+      await deps.waitForCompletion(sessionID, toolContext, ctx, {
+        baselineMessageKeys,
+        expectedPromptMessageID: promptMessageID,
+      })
     }
 
     const responseText = await deps.processMessages(sessionID, ctx, {
       baselineMessageKeys,
+      expectedPromptMessageID: promptMessageID,
       expectedArtifactKind: structuredReviewProtocol?.expectedArtifactKind,
     })
 
