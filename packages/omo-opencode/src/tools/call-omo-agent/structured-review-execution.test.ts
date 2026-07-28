@@ -83,6 +83,41 @@ test.each([
   }))
 })
 
+test("preserves child metadata when structured response processing fails", async () => {
+  const sessionID = "ses-structured-invalid-response"
+  const { ctx, toolContext } = createContext(sessionID)
+  const { deps } = createDeps(sessionID)
+  deps.processMessages = mock(async () => {
+    throw new Error("Structured reviewer response must be one JSON mapping.")
+  })
+
+  const result = await executeSync(
+    {
+      subagent_type: "explore",
+      description: "structured review",
+      prompt: "Review the frozen artifact.",
+      prompt_receipt: {
+        source: "file",
+        byteCount: 27,
+        sha256: "a".repeat(64),
+      },
+      response_mode: "thinker_v21",
+      run_in_background: false,
+    } as never,
+    toolContext,
+    ctx as never,
+    deps as never,
+  )
+
+  expect(result).toContain("Error: Structured reviewer response must be one JSON mapping.")
+  expect(result).toContain(`<task_metadata>\nsession_id: ${sessionID}`)
+  expect(result).toContain("prompt_source: file")
+  expect(result).toContain("prompt_bytes: 27")
+  expect(result).toContain(`prompt_sha256: ${"a".repeat(64)}`)
+  expect(result.match(/<task_metadata>/g)).toHaveLength(1)
+  expect(result.match(/<\/task_metadata>/g)).toHaveLength(1)
+})
+
 test("keeps combined processing when a prompt happens to mention Thinker markers", async () => {
   const sessionID = "ses-ordinary-review"
   const { ctx, toolContext } = createContext(sessionID)

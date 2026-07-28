@@ -13,15 +13,25 @@ export interface ProcessMessagesOptions {
   expectedArtifactKind?: "thinker_raw_verdict" | "thinker_raw_verdict_v21"
 }
 
-function validateStructuredReviewResponse(
+function normalizeStructuredReviewResponse(
   responseText: string,
   expectedArtifactKind: NonNullable<ProcessMessagesOptions["expectedArtifactKind"]>,
-): void {
+): string {
+  let candidate = responseText
   let parsed: unknown
   try {
-    parsed = JSON.parse(responseText)
+    parsed = JSON.parse(candidate)
   } catch {
-    throw new Error("Structured reviewer response must be one JSON mapping.")
+    const fencedMappings = [...responseText.matchAll(/```json[ \t]*\r?\n([\s\S]*?)\r?\n```/gi)]
+    if (fencedMappings.length !== 1) {
+      throw new Error("Structured reviewer response must be one JSON mapping.")
+    }
+    candidate = fencedMappings[0][1].trim()
+    try {
+      parsed = JSON.parse(candidate)
+    } catch {
+      throw new Error("Structured reviewer response must be one JSON mapping.")
+    }
   }
   if (
     typeof parsed !== "object"
@@ -31,6 +41,7 @@ function validateStructuredReviewResponse(
   ) {
     throw new Error(`Structured reviewer response must declare artifact_kind ${expectedArtifactKind}.`)
   }
+  return candidate
 }
 
 export async function processMessages(
@@ -112,8 +123,7 @@ export async function processMessages(
       .join("")
 
     log(`[call_omo_agent] Got final assistant response, length: ${responseText.length}`)
-    validateStructuredReviewResponse(responseText, options.expectedArtifactKind)
-    return responseText
+    return normalizeStructuredReviewResponse(responseText, options.expectedArtifactKind)
   }
 
   // Extract content from ALL messages, not just the last one

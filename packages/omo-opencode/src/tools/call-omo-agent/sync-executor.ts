@@ -267,26 +267,35 @@ export async function executeSync(
       throw new Error("No prompt message ID was created for the synchronous dispatch.")
     }
 
-    if (structuredReviewProtocol) {
-      await deps.waitForCompletion(sessionID, toolContext, ctx, {
-        maxPollTimeMs: 10 * 60 * 1000,
+    try {
+      if (structuredReviewProtocol) {
+        await deps.waitForCompletion(sessionID, toolContext, ctx, {
+          maxPollTimeMs: 10 * 60 * 1000,
+          baselineMessageKeys,
+          expectedPromptMessageID: promptMessageID,
+        })
+      } else {
+        await deps.waitForCompletion(sessionID, toolContext, ctx, {
+          baselineMessageKeys,
+          expectedPromptMessageID: promptMessageID,
+        })
+      }
+
+      const responseText = await deps.processMessages(sessionID, ctx, {
         baselineMessageKeys,
         expectedPromptMessageID: promptMessageID,
+        expectedArtifactKind: structuredReviewProtocol?.expectedArtifactKind,
       })
-    } else {
-      await deps.waitForCompletion(sessionID, toolContext, ctx, {
-        baselineMessageKeys,
-        expectedPromptMessageID: promptMessageID,
-      })
+
+      return responseText + "\n\n" + taskMetadata(sessionID, args)
+    } catch (error) {
+      if (!structuredReviewProtocol) {
+        throw error
+      }
+      const errorMessage = error instanceof Error ? error.message : String(error)
+      log(`[call_omo_agent] Structured review response error:`, errorMessage)
+      return `Error: ${errorMessage}\n\n${taskMetadata(sessionID, args)}`
     }
-
-    const responseText = await deps.processMessages(sessionID, ctx, {
-      baselineMessageKeys,
-      expectedPromptMessageID: promptMessageID,
-      expectedArtifactKind: structuredReviewProtocol?.expectedArtifactKind,
-    })
-
-    return responseText + "\n\n" + taskMetadata(sessionID, args)
   } catch (error) {
     spawnReservation?.rollback()
     throw error
