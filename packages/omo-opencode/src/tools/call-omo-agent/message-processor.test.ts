@@ -21,7 +21,7 @@ describe("processMessages", () => {
     const finalJson = '{"artifact_kind":"thinker_raw_verdict","role_verdict":"approve"}'
     const messages = [
       {
-        info: { id: "assistant-progress", role: "assistant", time: { created: 1 } },
+        info: { id: "assistant-progress", role: "assistant", parentID: "current-user", time: { created: 1 } },
         parts: [{ type: "text", text: "Need inspect the implementation first." }],
       },
       {
@@ -29,7 +29,7 @@ describe("processMessages", () => {
         parts: [{ type: "tool_result", content: "source lines and test output" }],
       },
       {
-        info: { id: "assistant-final", role: "assistant", time: { created: 3 } },
+        info: { id: "assistant-final", role: "assistant", parentID: "current-user", time: { created: 3 } },
         parts: [{ type: "text", text: finalJson }],
       },
     ]
@@ -37,7 +37,10 @@ describe("processMessages", () => {
     const result = await processMessages(
       sessionID,
       createContext(messages) as never,
-      { expectedArtifactKind: "thinker_raw_verdict" },
+      {
+        expectedPromptMessageID: "current-user",
+        expectedArtifactKind: "thinker_raw_verdict",
+      },
     )
 
     expect(result).toBe(finalJson)
@@ -87,13 +90,47 @@ describe("processMessages", () => {
     )).rejects.toThrow("No fresh assistant response found")
   })
 
-  test("structured output rejects a non-matching JSON artifact", async () => {
-    const sessionID = "structured-invalid-artifact-test"
+  test("structured output rejects a post-baseline assistant not linked to this prompt", async () => {
+    const sessionID = "structured-post-baseline-stale-assistant-test"
     resetMessageCursor(sessionID)
     const messages = [
       {
-        info: { id: "assistant-final", role: "assistant", time: { created: 1 } },
-        parts: [{ type: "text", text: '{"artifact_kind":"unexpected"}' }],
+        info: { id: "old-user", role: "user", time: { created: 1 } },
+        parts: [{ type: "text", text: "Old review prompt" }],
+      },
+      {
+        info: {
+          id: "late-old-assistant",
+          role: "assistant",
+          parentID: "old-user",
+          time: { created: 2 },
+        },
+        parts: [{ type: "text", text: '{"artifact_kind":"thinker_raw_verdict"}' }],
+      },
+      {
+        info: { id: "current-user", role: "user", time: { created: 3 } },
+        parts: [{ type: "text", text: "Current review prompt" }],
+      },
+    ]
+
+    await expect(processMessages(
+      sessionID,
+      createContext(messages) as never,
+      {
+        baselineMessageKeys: new Set(["id:old-user"]),
+        expectedPromptMessageID: "current-user",
+        expectedArtifactKind: "thinker_raw_verdict",
+      },
+    )).rejects.toThrow("No final assistant response linked to the dispatched prompt found")
+  })
+
+  test("structured output requires a dispatched prompt message ID", async () => {
+    const sessionID = "structured-missing-prompt-id-test"
+    resetMessageCursor(sessionID)
+    const messages = [
+      {
+        info: { id: "assistant-final", role: "assistant", parentID: "current-user", time: { created: 1 } },
+        parts: [{ type: "text", text: '{"artifact_kind":"thinker_raw_verdict"}' }],
       },
     ]
 
@@ -101,6 +138,26 @@ describe("processMessages", () => {
       sessionID,
       createContext(messages) as never,
       { expectedArtifactKind: "thinker_raw_verdict" },
+    )).rejects.toThrow("Structured reviewer response requires a dispatched prompt message ID")
+  })
+
+  test("structured output rejects a non-matching JSON artifact", async () => {
+    const sessionID = "structured-invalid-artifact-test"
+    resetMessageCursor(sessionID)
+    const messages = [
+      {
+        info: { id: "assistant-final", role: "assistant", parentID: "current-user", time: { created: 1 } },
+        parts: [{ type: "text", text: '{"artifact_kind":"unexpected"}' }],
+      },
+    ]
+
+    await expect(processMessages(
+      sessionID,
+      createContext(messages) as never,
+      {
+        expectedPromptMessageID: "current-user",
+        expectedArtifactKind: "thinker_raw_verdict",
+      },
     )).rejects.toThrow("Structured reviewer response must declare artifact_kind thinker_raw_verdict")
   })
 

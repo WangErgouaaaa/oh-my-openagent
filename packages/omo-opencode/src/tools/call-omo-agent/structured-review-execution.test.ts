@@ -6,7 +6,9 @@ function createContext(sessionID: string) {
     ctx: {
       client: {
         session: {
-          prompt: mock(async () => ({ data: {} })),
+          prompt: mock(async (input: { body?: { messageID?: string } }) => ({
+            data: { info: { parentID: input.body?.messageID } },
+          })),
           promptAsync: mock(async () => ({ data: {} })),
         },
       },
@@ -72,10 +74,12 @@ test.each([
   expect(getObservedMessageOptions()).toEqual(expect.objectContaining({
     expectedArtifactKind: artifactKind,
     baselineMessageKeys: new Set(["id:old-assistant"]),
+    expectedPromptMessageID: expect.any(String),
   }))
   expect(getObservedWaitOptions()).toEqual(expect.objectContaining({
     maxPollTimeMs: 10 * 60 * 1000,
     baselineMessageKeys: new Set(["id:old-assistant"]),
+    expectedPromptMessageID: expect.any(String),
   }))
 })
 

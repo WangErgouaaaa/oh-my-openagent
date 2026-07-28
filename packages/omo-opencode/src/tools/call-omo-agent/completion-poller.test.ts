@@ -146,6 +146,45 @@ describe("waitForCompletion", () => {
     }
   })
 
+  test("#given a post-baseline assistant belongs to an earlier prompt #when this prompt has no linked assistant #then it does not report completion", async () => {
+    const originalDateNow = Date.now
+    const originalSetTimeout = globalThis.setTimeout
+    let currentTime = 0
+    Date.now = () => {
+      currentTime += 30_000
+      return currentTime
+    }
+    globalThis.setTimeout = ((handler: TimerHandler) => {
+      if (typeof handler === "function") {
+        handler()
+      }
+      return originalSetTimeout(() => {}, 0)
+    }) as typeof globalThis.setTimeout
+
+    const status = mock(async () => ({ data: { "ses-linked-review": { type: "idle" } } }))
+    const messages = mock(async () => ({
+      data: [
+        { info: { id: "current-user", role: "user" } },
+        { info: { id: "late-old-assistant", role: "assistant", parentID: "old-user" } },
+      ],
+    }))
+
+    try {
+      await expect(waitForCompletion(
+        "ses-linked-review",
+        createToolContext(),
+        createContext({ status, messages }),
+        {
+          expectedPromptMessageID: "current-user",
+          maxPollTimeMs: 2 * 60 * 1000,
+        },
+      )).rejects.toThrow("Agent task timed out after 2 minutes.")
+    } finally {
+      Date.now = originalDateNow
+      globalThis.setTimeout = originalSetTimeout
+    }
+  })
+
   test("#given a ten-minute timeout #when the child stays active #then it reports ten minutes", async () => {
     // given
     const originalDateNow = Date.now

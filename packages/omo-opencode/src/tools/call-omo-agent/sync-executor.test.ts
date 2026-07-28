@@ -8,6 +8,7 @@ type ExecuteSync = typeof import("./sync-executor").executeSync
 type PromptAsyncInput = {
   path: { id: string }
   body: {
+    messageID?: string
     agent: string
     tools: Record<string, boolean>
     parts: Array<{ type: string; text: string }>
@@ -123,6 +124,7 @@ describe("executeSync", () => {
     expect(promptInput?.body.agent).toBe("explore")
     expect(promptInput?.body.tools.question).toBe(false)
     expect(promptInput?.body.tools.task).toBe(false)
+    expect(promptInput?.body.messageID).toMatch(/^msg_/)
     expect(promptInput?.body.parts).toEqual([{ type: "text", text: "find something" }])
   })
 
@@ -346,10 +348,12 @@ describe("executeSync", () => {
       waitForCompletion: mock(async (_sessionID, _toolContext, _ctx, options) => {
         events.push("wait")
         expect(options?.baselineMessageKeys).toBe(baselineMessageKeys)
+        expect(options?.expectedPromptMessageID).toMatch(/^msg_/)
       }),
       processMessages: mock(async (_sessionID, _ctx, options) => {
         events.push("process")
         expect(options?.baselineMessageKeys).toBe(baselineMessageKeys)
+        expect(options?.expectedPromptMessageID).toMatch(/^msg_/)
         return "fresh response"
       }),
     })
@@ -373,6 +377,32 @@ describe("executeSync", () => {
     )
 
     expect(events).toEqual(["baseline", "prompt", "wait", "process"])
+  })
+
+  test("fails closed when a structured prompt response is not linked to its dispatched user message", async () => {
+    const executeSync = await importExecuteSync()
+    const deps = createDependencies()
+    const toolContext = createToolContext()
+    const recorder = createPromptAsyncRecorder(async () => ({
+      data: { info: { parentID: "stale-user" } },
+    }))
+
+    const result = await executeSync(
+      {
+        subagent_type: "momus",
+        description: "structured review",
+        prompt: "Review the frozen artifact.",
+        response_mode: "thinker_v2",
+        run_in_background: false,
+      },
+      toolContext,
+      createContext(recorder.promptAsync) as never,
+      deps,
+    )
+
+    expect(result).toContain("Structured reviewer prompt response was not linked to the dispatched user message.")
+    expect(deps.waitForCompletion).not.toHaveBeenCalled()
+    expect(deps.processMessages).not.toHaveBeenCalled()
   })
 
   test("applies fallback chain to sync sessions before completion polling", async () => {
