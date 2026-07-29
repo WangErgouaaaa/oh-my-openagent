@@ -94,6 +94,51 @@ describe("processMessages", () => {
     )).rejects.toThrow("Structured reviewer response must be one JSON mapping")
   })
 
+  test("structured output rejects mixed unfenced and fenced JSON mappings", async () => {
+    const sessionID = "structured-mixed-mapping-test"
+    resetMessageCursor(sessionID)
+    const unfencedJson = '{"artifact_kind":"thinker_raw_verdict_v21","role":"explore"}'
+    const fencedJson = '{"artifact_kind":"thinker_raw_verdict_v21","role":"momus"}'
+    const messages = [{
+      info: { id: "assistant-final", role: "assistant", parentID: "current-user", time: { created: 1 } },
+      parts: [{
+        type: "text",
+        text: `${unfencedJson}\n\n\`\`\`json\n${fencedJson}\n\`\`\``,
+      }],
+    }]
+
+    await expect(processMessages(
+      sessionID,
+      createContext(messages) as never,
+      {
+        expectedPromptMessageID: "current-user",
+        expectedArtifactKind: "thinker_raw_verdict_v21",
+      },
+    )).rejects.toThrow("Structured reviewer response must be one JSON mapping")
+  })
+
+  test("structured output rejects an oversized brace-heavy response", async () => {
+    const sessionID = "structured-oversized-response-test"
+    resetMessageCursor(sessionID)
+    const fencedJson = '{"artifact_kind":"thinker_raw_verdict_v21","role":"momus"}'
+    const messages = [{
+      info: { id: "assistant-final", role: "assistant", parentID: "current-user", time: { created: 1 } },
+      parts: [{
+        type: "text",
+        text: `${"{".repeat(32 * 1024 + 1)}\n\n\`\`\`json\n${fencedJson}\n\`\`\``,
+      }],
+    }]
+
+    await expect(processMessages(
+      sessionID,
+      createContext(messages) as never,
+      {
+        expectedPromptMessageID: "current-user",
+        expectedArtifactKind: "thinker_raw_verdict_v21",
+      },
+    )).rejects.toThrow("Structured reviewer response exceeds 32768 characters")
+  })
+
   test("structured output rejects a stale assistant history", async () => {
     const sessionID = "structured-stale-history-test"
     resetMessageCursor(sessionID)

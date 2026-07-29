@@ -13,17 +13,57 @@ export interface ProcessMessagesOptions {
   expectedArtifactKind?: "thinker_raw_verdict" | "thinker_raw_verdict_v21"
 }
 
+const MAX_STRUCTURED_REVIEW_RESPONSE_CHARS = 32 * 1024
+
+function containsJsonMapping(text: string): boolean {
+  // ponytail: O(n²) scan is capped at 32 KiB; use a streaming parser if larger verdicts become necessary.
+  for (let start = text.indexOf("{"); start >= 0; start = text.indexOf("{", start + 1)) {
+    let depth = 0
+    let inString = false
+    let escaped = false
+
+    for (let index = start; index < text.length; index += 1) {
+      const character = text[index]
+      if (inString) {
+        if (escaped) escaped = false
+        else if (character === "\\") escaped = true
+        else if (character === "\"") inString = false
+        continue
+      }
+      if (character === "\"") {
+        inString = true
+      } else if (character === "{") {
+        depth += 1
+      } else if (character === "}" && --depth === 0) {
+        try {
+          JSON.parse(text.slice(start, index + 1))
+          return true
+        } catch {
+          break
+        }
+      }
+    }
+  }
+  return false
+}
+
 function normalizeStructuredReviewResponse(
   responseText: string,
   expectedArtifactKind: NonNullable<ProcessMessagesOptions["expectedArtifactKind"]>,
 ): string {
+  if (responseText.length > MAX_STRUCTURED_REVIEW_RESPONSE_CHARS) {
+    throw new Error(`Structured reviewer response exceeds ${MAX_STRUCTURED_REVIEW_RESPONSE_CHARS} characters.`)
+  }
+
   let candidate = responseText
   let parsed: unknown
   try {
     parsed = JSON.parse(candidate)
   } catch {
-    const fencedMappings = [...responseText.matchAll(/```json[ \t]*\r?\n([\s\S]*?)\r?\n```/gi)]
-    if (fencedMappings.length !== 1) {
+    const fencedMappingPattern = /```json[ \t]*\r?\n([\s\S]*?)\r?\n```/gi
+    const fencedMappings = [...responseText.matchAll(fencedMappingPattern)]
+    const unfencedText = responseText.replace(fencedMappingPattern, "")
+    if (fencedMappings.length !== 1 || containsJsonMapping(unfencedText)) {
       throw new Error("Structured reviewer response must be one JSON mapping.")
     }
     candidate = fencedMappings[0][1].trim()
