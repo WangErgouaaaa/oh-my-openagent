@@ -1,5 +1,6 @@
 import type { PluginInput } from "@opencode-ai/plugin"
 import { clearSessionAgent, handedBackSyncSessions, setSessionAgent, subagentSessions, syncSubagentSessions } from "../../features/claude-code-session-state"
+import { generateMessageId } from "../../features/hook-message-injector/id-generation"
 import { dispatchInternalPrompt, isInternalPromptDispatchAccepted } from "../../hooks/shared/prompt-async-gate"
 import { getAgentToolRestrictions, isAmbiguousPostDispatchPromptFailure, log } from "../../shared"
 import { normalizeAgentForPrompt, stripAgentListSortPrefix } from "../../shared/agent-display-names"
@@ -11,10 +12,10 @@ import type { FallbackEntry } from "../../shared/model-requirements"
 import type { DelegatedModelConfig } from "../../shared/model-resolution-types"
 import { applySessionPromptParams } from "../../shared/session-prompt-params-helpers"
 import { deleteSessionTools, setSessionTools } from "../../shared/session-tools-store"
-import { waitForCompletion } from "./completion-poller"
+import { captureMessageBaseline, waitForCompletion } from "./completion-poller"
 import { processMessages } from "./message-processor"
 import { createOrGetSession } from "./session-creator"
-import type { CallOmoAgentArgs } from "./types"
+import type { CallOmoAgentArgs, StructuredReviewResponseMode } from "./types"
 
 type SessionWithPrompt = {
   prompt: (opts: { path: { id: string }; body: Record<string, unknown> }) => Promise<unknown>
@@ -26,6 +27,7 @@ function hasPrompt(session: PluginInput["client"]["session"]): session is Plugin
 
 type ExecuteSyncDeps = {
   createOrGetSession: typeof createOrGetSession
+  captureMessageBaseline: typeof captureMessageBaseline
   waitForCompletion: typeof waitForCompletion
   processMessages: typeof processMessages
   setSessionFallbackChain: (sessionID: string, fallbackChain: FallbackEntry[] | undefined) => void
@@ -39,6 +41,7 @@ type SpawnReservation = {
 
 const defaultDeps: ExecuteSyncDeps = {
   createOrGetSession,
+  captureMessageBaseline,
   waitForCompletion,
   processMessages,
   setSessionFallbackChain: () => {},
@@ -71,6 +74,72 @@ function buildSyncPromptTools(agent: string): Record<string, boolean> {
   }
 }
 
+const STRUCTURED_REVIEW_PROTOCOLS: Record<StructuredReviewResponseMode, {
+  allowedAgents: readonly string[]
+  expectedArtifactKind: "thinker_raw_verdict" | "thinker_raw_verdict_v21"
+}> = {
+  thinker_v2: {
+    allowedAgents: ["momus", "oracle"],
+    expectedArtifactKind: "thinker_raw_verdict",
+  },
+  thinker_v21: {
+    allowedAgents: ["explore", "momus", "oracle"],
+    expectedArtifactKind: "thinker_raw_verdict_v21",
+  },
+}
+
+function resolveStructuredReviewProtocol(args: CallOmoAgentArgs) {
+  if (!args.response_mode) {
+    return undefined
+  }
+  const protocol = STRUCTURED_REVIEW_PROTOCOLS[args.response_mode]
+  if (!protocol.allowedAgents.includes(args.subagent_type.toLowerCase())) {
+    throw new Error(
+      `response_mode ${args.response_mode} is only supported by ${protocol.allowedAgents.join(", ")}.`,
+    )
+  }
+  return protocol
+}
+
+function promptReceiptMetadata(args: CallOmoAgentArgs): Record<string, unknown> {
+  if (!args.prompt_receipt) {
+    return {}
+  }
+  return {
+    promptSource: args.prompt_receipt.source,
+    promptByteCount: args.prompt_receipt.byteCount,
+    promptSha256: args.prompt_receipt.sha256,
+  }
+}
+
+function taskMetadata(sessionID: string, args: CallOmoAgentArgs): string {
+  const lines = ["<task_metadata>", `session_id: ${sessionID}`]
+  if (args.prompt_receipt) {
+    lines.push(
+      `prompt_source: ${args.prompt_receipt.source}`,
+      `prompt_bytes: ${args.prompt_receipt.byteCount}`,
+      `prompt_sha256: ${args.prompt_receipt.sha256}`,
+    )
+  }
+  lines.push("</task_metadata>")
+  return lines.join("\n")
+}
+
+function getPromptResponseParentID(response: unknown): string | undefined {
+  const payload = typeof response === "object" && response !== null && "data" in response
+    ? (response as { data?: unknown }).data
+    : response
+  if (typeof payload !== "object" || payload === null || !("info" in payload)) {
+    return undefined
+  }
+  const info = (payload as { info?: unknown }).info
+  if (typeof info !== "object" || info === null || !("parentID" in info)) {
+    return undefined
+  }
+  const parentID = (info as { parentID?: unknown }).parentID
+  return typeof parentID === "string" && parentID.length > 0 ? parentID : undefined
+}
+
 export async function executeSync(
   args: CallOmoAgentArgs,
   toolContext: {
@@ -89,8 +158,11 @@ export async function executeSync(
   let sessionID: string | undefined
   let createdSessionForExecution = false
   let appliedFallbackChain = false
+  let baselineMessageKeys: ReadonlySet<string> = new Set()
+  let promptMessageID: string | undefined
 
   try {
+    const structuredReviewProtocol = resolveStructuredReviewProtocol(args)
     const session = await deps.createOrGetSession(args, toolContext, ctx, model)
     sessionID = session.sessionID
     createdSessionForExecution = session.isNew
@@ -112,7 +184,10 @@ export async function executeSync(
     await Promise.resolve(
       toolContext.metadata?.({
         title: args.description,
-        metadata: { sessionId: sessionID },
+        metadata: {
+          sessionId: sessionID,
+          ...promptReceiptMetadata(args),
+        },
       })
     )
 
@@ -132,9 +207,11 @@ export async function executeSync(
 
     try {
       if (!hasPrompt(ctx.client.session)) {
-        return `Error: Failed to send prompt: prompt is not available on this OpenCode client.\n\n<task_metadata>\nsession_id: ${sessionID}\n</task_metadata>`
+        return `Error: Failed to send prompt: prompt is not available on this OpenCode client.\n\n${taskMetadata(sessionID, args)}`
       }
 
+      baselineMessageKeys = await deps.captureMessageBaseline(sessionID, ctx)
+      promptMessageID = generateMessageId()
       const promptResult = await dispatchInternalPrompt({
         mode: "sync",
         client: ctx.client,
@@ -145,6 +222,7 @@ export async function executeSync(
         input: {
           path: { id: sessionID },
           body: {
+            messageID: promptMessageID,
             agent: promptAgent,
             tools: promptTools,
             parts: [{ type: "text", text: args.prompt }],
@@ -169,20 +247,55 @@ export async function executeSync(
       if (!promptMayHaveBeenAccepted && !isInternalPromptDispatchAccepted(promptResult)) {
         throw new Error(`prompt skipped by gate: ${promptResult.status}`)
       }
+      if (
+        structuredReviewProtocol
+        && promptResult.status === "dispatched"
+        && getPromptResponseParentID(promptResult.response) !== promptMessageID
+      ) {
+        throw new Error("Structured reviewer prompt response was not linked to the dispatched user message.")
+      }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error)
       log(`[call_omo_agent] Prompt error:`, errorMessage)
       if (errorMessage.includes("agent.name") || errorMessage.includes("undefined")) {
-        return `Error: Agent "${normalizedSubagentType}" not found. Make sure the agent is registered in your opencode.json or provided by a plugin.\n\n<task_metadata>\nsession_id: ${sessionID}\n</task_metadata>`
+        return `Error: Agent "${normalizedSubagentType}" not found. Make sure the agent is registered in your opencode.json or provided by a plugin.\n\n${taskMetadata(sessionID, args)}`
       }
-      return `Error: Failed to send prompt: ${errorMessage}\n\n<task_metadata>\nsession_id: ${sessionID}\n</task_metadata>`
+      return `Error: Failed to send prompt: ${errorMessage}\n\n${taskMetadata(sessionID, args)}`
     }
 
-    await deps.waitForCompletion(sessionID, toolContext, ctx)
+    if (!promptMessageID) {
+      throw new Error("No prompt message ID was created for the synchronous dispatch.")
+    }
 
-    const responseText = await deps.processMessages(sessionID, ctx)
+    try {
+      if (structuredReviewProtocol) {
+        await deps.waitForCompletion(sessionID, toolContext, ctx, {
+          maxPollTimeMs: 10 * 60 * 1000,
+          baselineMessageKeys,
+          expectedPromptMessageID: promptMessageID,
+        })
+      } else {
+        await deps.waitForCompletion(sessionID, toolContext, ctx, {
+          baselineMessageKeys,
+          expectedPromptMessageID: promptMessageID,
+        })
+      }
 
-    return responseText + "\n\n" + ["<task_metadata>", `session_id: ${sessionID}`, "</task_metadata>"].join("\n")
+      const responseText = await deps.processMessages(sessionID, ctx, {
+        baselineMessageKeys,
+        expectedPromptMessageID: promptMessageID,
+        expectedArtifactKind: structuredReviewProtocol?.expectedArtifactKind,
+      })
+
+      return responseText + "\n\n" + taskMetadata(sessionID, args)
+    } catch (error) {
+      if (!structuredReviewProtocol) {
+        throw error
+      }
+      const errorMessage = error instanceof Error ? error.message : String(error)
+      log(`[call_omo_agent] Structured review response error:`, errorMessage)
+      return `Error: ${errorMessage}\n\n${taskMetadata(sessionID, args)}`
+    }
   } catch (error) {
     spawnReservation?.rollback()
     throw error

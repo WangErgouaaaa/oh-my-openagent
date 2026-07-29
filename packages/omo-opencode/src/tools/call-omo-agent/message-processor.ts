@@ -1,15 +1,93 @@
 import type { PluginInput } from "@opencode-ai/plugin"
 import { log } from "../../shared"
-import { consumeNewMessages } from "../../shared/session-cursor"
+import { buildMessageKey, consumeNewMessages } from "../../shared/session-cursor"
 
 interface SDKMessage {
-  info?: { role?: string; time?: { created?: number } }
+  info?: { id?: string; role?: string; parentID?: string; time?: { created?: number } }
   parts?: Array<{ type: string; text?: string; content?: string | Array<{ type: string; text?: string }> }>
+}
+
+export interface ProcessMessagesOptions {
+  baselineMessageKeys?: ReadonlySet<string>
+  expectedPromptMessageID?: string
+  expectedArtifactKind?: "thinker_raw_verdict" | "thinker_raw_verdict_v21"
+}
+
+const MAX_STRUCTURED_REVIEW_RESPONSE_CHARS = 32 * 1024
+
+function containsJsonMapping(text: string): boolean {
+  // ponytail: O(n²) scan is capped at 32 KiB; use a streaming parser if larger verdicts become necessary.
+  for (let start = text.indexOf("{"); start >= 0; start = text.indexOf("{", start + 1)) {
+    let depth = 0
+    let inString = false
+    let escaped = false
+
+    for (let index = start; index < text.length; index += 1) {
+      const character = text[index]
+      if (inString) {
+        if (escaped) escaped = false
+        else if (character === "\\") escaped = true
+        else if (character === "\"") inString = false
+        continue
+      }
+      if (character === "\"") {
+        inString = true
+      } else if (character === "{") {
+        depth += 1
+      } else if (character === "}" && --depth === 0) {
+        try {
+          JSON.parse(text.slice(start, index + 1))
+          return true
+        } catch {
+          break
+        }
+      }
+    }
+  }
+  return false
+}
+
+function normalizeStructuredReviewResponse(
+  responseText: string,
+  expectedArtifactKind: NonNullable<ProcessMessagesOptions["expectedArtifactKind"]>,
+): string {
+  if (responseText.length > MAX_STRUCTURED_REVIEW_RESPONSE_CHARS) {
+    throw new Error(`Structured reviewer response exceeds ${MAX_STRUCTURED_REVIEW_RESPONSE_CHARS} characters.`)
+  }
+
+  let candidate = responseText
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(candidate)
+  } catch {
+    const fencedMappingPattern = /```json[ \t]*\r?\n([\s\S]*?)\r?\n```/gi
+    const fencedMappings = [...responseText.matchAll(fencedMappingPattern)]
+    const unfencedText = responseText.replace(fencedMappingPattern, "")
+    if (fencedMappings.length !== 1 || containsJsonMapping(unfencedText)) {
+      throw new Error("Structured reviewer response must be one JSON mapping.")
+    }
+    candidate = fencedMappings[0][1].trim()
+    try {
+      parsed = JSON.parse(candidate)
+    } catch {
+      throw new Error("Structured reviewer response must be one JSON mapping.")
+    }
+  }
+  if (
+    typeof parsed !== "object"
+    || parsed === null
+    || Array.isArray(parsed)
+    || (parsed as { artifact_kind?: unknown }).artifact_kind !== expectedArtifactKind
+  ) {
+    throw new Error(`Structured reviewer response must declare artifact_kind ${expectedArtifactKind}.`)
+  }
+  return candidate
 }
 
 export async function processMessages(
   sessionID: string,
-  ctx: PluginInput
+  ctx: PluginInput,
+  options: ProcessMessagesOptions = {},
 ): Promise<string> {
   const messagesResult = await ctx.client.session.messages({
     path: { id: sessionID },
@@ -25,9 +103,14 @@ export async function processMessages(
 
   // Include both assistant messages AND tool messages
   // Tool results (grep, glob, bash output) come from role "tool"
-  const relevantMessages = messages.filter(
-    (m: SDKMessage) => m.info?.role === "assistant" || m.info?.role === "tool"
-  )
+  const relevantMessages = messages
+    .map((message: SDKMessage, index: number) => ({
+      key: buildMessageKey(message, index),
+      message,
+    }))
+    .filter(
+      ({ message }) => message.info?.role === "assistant" || message.info?.role === "tool",
+    )
 
   if (relevantMessages.length === 0) {
     log(`[call_omo_agent] No assistant or tool messages found`)
@@ -38,16 +121,49 @@ export async function processMessages(
   log(`[call_omo_agent] Found ${relevantMessages.length} relevant messages`)
 
   // Sort by time ascending (oldest first) to process messages in order
-  const sortedMessages = [...relevantMessages].sort((a: SDKMessage, b: SDKMessage) => {
-    const timeA = a.info?.time?.created ?? 0
-    const timeB = b.info?.time?.created ?? 0
+  const sortedMessages = [...relevantMessages].sort((a, b) => {
+    const timeA = a.message.info?.time?.created ?? 0
+    const timeB = b.message.info?.time?.created ?? 0
     return timeA - timeB
   })
 
-  const newMessages = consumeNewMessages(sessionID, sortedMessages)
+  const newMessages = options.baselineMessageKeys
+    ? sortedMessages
+      .filter(({ key }) => !options.baselineMessageKeys?.has(key))
+      .map(({ message }) => message)
+    : consumeNewMessages(sessionID, sortedMessages.map(({ message }) => message))
 
   if (newMessages.length === 0) {
+    if (options.expectedArtifactKind) {
+      throw new Error("No fresh assistant response found")
+    }
     return "No new output since last check."
+  }
+
+  if (options.expectedArtifactKind) {
+    if (!options.expectedPromptMessageID) {
+      throw new Error("Structured reviewer response requires a dispatched prompt message ID.")
+    }
+
+    const finalAssistant = [...newMessages]
+      .reverse()
+      .find((message: SDKMessage) =>
+        message.info?.role === "assistant"
+        && message.info.parentID === options.expectedPromptMessageID
+        && (message.parts ?? []).some((part) => part.type === "text" && Boolean(part.text))
+      )
+
+    if (!finalAssistant) {
+      throw new Error("No final assistant response linked to the dispatched prompt found")
+    }
+
+    const responseText = (finalAssistant.parts ?? [])
+      .filter((part) => part.type === "text" && Boolean(part.text))
+      .map((part) => (part as { text: string }).text)
+      .join("")
+
+    log(`[call_omo_agent] Got final assistant response, length: ${responseText.length}`)
+    return normalizeStructuredReviewResponse(responseText, options.expectedArtifactKind)
   }
 
   // Extract content from ALL messages, not just the last one

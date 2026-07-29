@@ -28,7 +28,7 @@ function cloneCursorState(state: CursorState | undefined): CursorState | undefin
   }
 }
 
-function buildMessageKey(message: CursorMessage, index: number): string {
+export function buildMessageKey(message: CursorMessage, index: number): string {
   const id = message.info?.id
   if (id) return `id:${id}`
 

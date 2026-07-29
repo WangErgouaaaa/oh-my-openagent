@@ -10,6 +10,7 @@ import { executeSync } from "./sync-executor"
 function createDependencies(sessionID: string, isNew: boolean) {
   return {
     createOrGetSession: mock(async () => ({ sessionID, isNew })),
+    captureMessageBaseline: mock(async () => new Set()),
     waitForCompletion: mock(async () => {}),
     processMessages: mock(async () => "agent response"),
     setSessionFallbackChain: mock(() => {}),
