@@ -5784,6 +5784,9 @@
           },
           "disable": {
             "type": "boolean"
+          },
+          "warn_unavailable": {
+            "type": "boolean"
           }
         },
         "additionalProperties": false
