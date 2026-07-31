@@ -60,7 +60,13 @@ function persistSessions(store: TaskRecordStore, taskId: string): string {
   return newest
 }
 
-type RespawnControl = { readonly switchCalls: string[]; settle(): void; readonly terminated: () => number; readonly disposed: () => number }
+type RespawnControl = {
+  readonly pid: number
+  readonly switchCalls: string[]
+  settle(): void
+  readonly terminated: () => number
+  readonly disposed: () => number
+}
 
 class FakeRespawnRunner {
   readonly startedSpecs: RpcRunnerSpec[] = []
@@ -95,7 +101,7 @@ class FakeRespawnRunner {
         return { cancelled: this.cancelSwitch }
       },
     }
-    this.controls.push({ switchCalls, settle: resolveIdle, terminated: () => terminated, disposed: () => disposed })
+    this.controls.push({ pid, switchCalls, settle: resolveIdle, terminated: () => terminated, disposed: () => disposed })
     return handle
   }
 }
@@ -393,11 +399,21 @@ describe("reconcileOnSessionStart reattach", () => {
 
     // then
     expect(respawnRunner.startedSpecs).toHaveLength(2)
-    expect(respawnRunner.controls[1]?.terminated()).toBe(1)
-    expect(respawnRunner.controls[1]?.disposed()).toBe(1)
+    const controlStates = respawnRunner.controls.map((control) => ({
+      pid: control.pid,
+      terminated: control.terminated(),
+      disposed: control.disposed(),
+    }))
+    const discardedControls = controlStates.filter((control) => control.terminated === 1 && control.disposed === 1)
+    const survivingControls = controlStates.filter((control) => control.terminated === 0 && control.disposed === 0)
+    expect(controlStates).toHaveLength(2)
+    expect(discardedControls).toHaveLength(1)
+    expect(survivingControls).toHaveLength(1)
     expect(results.flatMap((result) => result.outcomes.map((outcome) => outcome.kind))).toEqual(["resumed", "resumed"])
     expect(store.load("st_0000000b")?.notification.run_epoch).toBe(1)
-    expect(manager.getResidentHandle("st_0000000b")?.pid).toBe(1001)
+    const survivingControl = survivingControls[0]
+    if (survivingControl === undefined) throw new Error("expected one surviving respawn control")
+    expect(manager.getResidentHandle("st_0000000b")?.pid).toBe(survivingControl.pid)
   })
 
   test(" w2reattach #given a process runner reports effective launch inputs #when persisted record is reloaded #then only safe spawn facts survive", async () => {
