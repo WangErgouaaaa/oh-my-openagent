@@ -28,8 +28,10 @@ function createToolContext() {
   }
 }
 
-function createExecuteContext(abortMock: ReturnType<typeof mock>) {
-  const promptAsync = mock(async () => ({ data: {} }))
+function createExecuteContext(
+  abortMock: ReturnType<typeof mock>,
+  promptAsync = mock(async () => ({ data: {} })),
+) {
   return {
     client: {
       session: {
@@ -102,7 +104,7 @@ describe("issue #5112 - completed sync subagent must not be re-awakened", () => 
     expect(reawakened).toBe(false)
   })
 
-  test("#given a created sync subagent completed #when the handoff finishes #then the child session is aborted (PR #5113)", async () => {
+  test("#given a created sync subagent completed #when the handoff finishes #then the returned session remains continuable", async () => {
     //#given
     const childSessionID = "ses-sync-child-abort"
     const abortMock = mock(async () => ({ data: true }))
@@ -111,7 +113,7 @@ describe("issue #5112 - completed sync subagent must not be re-awakened", () => 
     await executeSync(args, createToolContext(), createExecuteContext(abortMock) as never, createDependencies(childSessionID, true))
 
     //#then
-    expect(abortMock).toHaveBeenCalledWith({ path: { id: childSessionID } })
+    expect(abortMock).not.toHaveBeenCalled()
   })
 
   test("#given the sync run reused an existing session (isNew=false) #when the run finishes #then it is neither aborted nor exempted from continuation", async () => {
@@ -126,5 +128,36 @@ describe("issue #5112 - completed sync subagent must not be re-awakened", () => 
     //#then
     expect(abortMock).not.toHaveBeenCalled()
     expect(reawakened).toBe(true)
+  })
+
+  test("#given a handed-back sync child #when that exact child is continued and handed back again #then todo-continuation still does not re-awaken it", async () => {
+    //#given
+    const childSessionID = "ses-sync-child-continued"
+    const abortMock = mock(async () => ({ data: true }))
+    await executeSync(args, createToolContext(), createExecuteContext(abortMock) as never, createDependencies(childSessionID, true))
+
+    //#when
+    await executeSync(args, createToolContext(), createExecuteContext(abortMock) as never, createDependencies(childSessionID, false))
+    const reawakened = await driveEnforcerIdle(childSessionID)
+
+    //#then
+    expect(reawakened).toBe(false)
+  })
+
+  test("#given a handed-back sync child #when exact-child continuation fails while sending the prompt #then todo-continuation still does not re-awaken it", async () => {
+    //#given
+    const childSessionID = "ses-sync-child-continuation-error"
+    const abortMock = mock(async () => ({ data: true }))
+    await executeSync(args, createToolContext(), createExecuteContext(abortMock) as never, createDependencies(childSessionID, true))
+    const failedPrompt = mock(async () => {
+      throw new Error("prompt failed")
+    })
+
+    //#when
+    await executeSync(args, createToolContext(), createExecuteContext(abortMock, failedPrompt) as never, createDependencies(childSessionID, false))
+    const reawakened = await driveEnforcerIdle(childSessionID)
+
+    //#then
+    expect(reawakened).toBe(false)
   })
 })

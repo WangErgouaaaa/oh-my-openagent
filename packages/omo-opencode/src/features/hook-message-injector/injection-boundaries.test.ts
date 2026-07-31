@@ -113,7 +113,7 @@ describe("hook message injection boundaries", () => {
       readonly tools: Record<string, boolean | string>
     }>(join(messageDir, messageFiles[0] ?? ""))
 
-    expect(message.id).toMatch(/^msg_[0-9a-f]{8}_\d{6}$/)
+    expect(message.id).toMatch(/^msg_[0-9a-f]{26}$/)
     expect(message.sessionID).toBe("ses_direct")
     expect(message.role).toBe("user")
     expect(message.agent).toBe("atlas")
@@ -133,7 +133,7 @@ describe("hook message injection boundaries", () => {
       readonly sessionID: string
     }>(join(TEST_PART_STORAGE, message.id, partFiles[0] ?? ""))
 
-    expect(part.id).toMatch(/^prt_[0-9a-f]{8}_\d{6}$/)
+    expect(part.id).toMatch(/^prt_[0-9a-f]{26}$/)
     expect(part.type).toBe("text")
     expect(part.text).toBe("test content\n<!-- OMO_INTERNAL_INITIATOR -->")
     expect(part.synthetic).toBe(true)

@@ -396,9 +396,9 @@ describe("findMessageContextFromSDK", () => {
 })
 
 describe("generateMessageId", () => {
-  it("returns deterministic sequential IDs with fixed format", () => {
+  it("returns OpenCode-compatible ascending IDs", () => {
     // given
-    const format = /^msg_[0-9a-f]{8}_\d{6}$/
+    const format = /^msg_[0-9a-f]{26}$/
 
     // when
     const firstId = generateMessageId()
@@ -407,15 +407,33 @@ describe("generateMessageId", () => {
     // then
     expect(firstId).toMatch(format)
     expect(secondId).toMatch(format)
-    expect(secondId.split("_")[1]).toBe(firstId.split("_")[1])
-    expect(Number(secondId.split("_")[2])).toBe(Number(firstId.split("_")[2]) + 1)
+    expect(secondId > firstId).toBe(true)
+  })
+
+  it("sorts a continued user message after an earlier native assistant ID", () => {
+    // given
+    const timestamp = 1_785_535_100_000
+    const mask = (1n << 48n) - 1n
+    const previousTime = (BigInt(timestamp - 1) * 0x1000n + 0xfffn) & mask
+    const previousAssistantId = `msg_${previousTime.toString(16).padStart(12, "0")}${"z".repeat(14)}`
+    const now = vi.spyOn(Date, "now").mockReturnValue(timestamp)
+
+    try {
+      // when
+      const continuedUserId = generateMessageId()
+
+      // then
+      expect(continuedUserId > previousAssistantId).toBe(true)
+    } finally {
+      now.mockRestore()
+    }
   })
 })
 
 describe("generatePartId", () => {
-  it("returns deterministic sequential IDs with fixed format", () => {
+  it("returns OpenCode-compatible ascending IDs", () => {
     // given
-    const format = /^prt_[0-9a-f]{8}_\d{6}$/
+    const format = /^prt_[0-9a-f]{26}$/
 
     // when
     const firstId = generatePartId()
@@ -424,8 +442,7 @@ describe("generatePartId", () => {
     // then
     expect(firstId).toMatch(format)
     expect(secondId).toMatch(format)
-    expect(secondId.split("_")[1]).toBe(firstId.split("_")[1])
-    expect(Number(secondId.split("_")[2])).toBe(Number(firstId.split("_")[2]) + 1)
+    expect(secondId > firstId).toBe(true)
   })
 })
 
