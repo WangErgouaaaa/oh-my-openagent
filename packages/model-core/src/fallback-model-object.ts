@@ -5,5 +5,6 @@ export type FallbackModelObject = {
   readonly temperature?: number
   readonly top_p?: number
   readonly maxTokens?: number
+  readonly providerOptions?: Record<string, unknown>
   readonly thinking?: { readonly type: "enabled" | "disabled"; readonly budgetTokens?: number }
 }

@@ -2,6 +2,7 @@ import { dirname, posix } from "node:path"
 
 import { isPlainObject } from "../internal/plain-object"
 import { parseJsoncSafe } from "../internal/jsonc-parse"
+import { moveMigrationBackup } from "./backup-move"
 import { prepareTargetWrite, targetDocument, writeOmoMigrationTarget, writePreparedTarget } from "./commit"
 import { type MigrationBackupMove, migrationJournalPath, removeMigrationJournal, writeMigrationJournal } from "./journal"
 import { acquireMigrationLock, migrationLockPath } from "./lock"
@@ -145,8 +146,7 @@ function executePlan(input: {
   input.onBoundary?.("target-recorded")
   for (const move of targetRecorded.backupMoves) {
     input.renewLock()
-    if (fileSystem.existsSync(move.to)) throw new MigrationTransactionError(`Migration backup path already exists: ${move.to}`)
-    fileSystem.renameSync(move.from, move.to)
+    moveMigrationBackup(move, fileSystem)
     input.onBoundary?.("source-moved")
     Object.assign(targetRecorded, { completedMoves: [...targetRecorded.completedMoves, move.from] })
     writeMigrationJournal(targetRecorded, fileSystem, env, input.process, input.clock)
@@ -168,7 +168,9 @@ export function runMigrations(options: RunMigrationsOptions): MigrationBatchRunR
   if (lock === null) return { journalResumed: false, results: [], status: "locked" }
 
   try {
-    const journalResumed = resumeMigrationJournal({ clock, env, fileSystem, process, renewLock: lock.renew, writeTarget })
+    const journalResumed = options.dryRun === true
+      ? false
+      : resumeMigrationJournal({ clock, env, fileSystem, process, renewLock: lock.renew, writeTarget })
     lock.renew()
     const results = options.discover().map((plan) => executePlan({
       clock,

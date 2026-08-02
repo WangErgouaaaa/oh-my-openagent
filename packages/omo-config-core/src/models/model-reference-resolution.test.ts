@@ -14,7 +14,7 @@ describe("resolveModelReferences", () => {
         oracle: { model: "sol", models: ["sol"] },
       },
       categories: {
-        deep: { model: "sol", fallback_models: ["sol"] },
+        deep: { model: "sol", models: ["sol"], fallback_models: ["sol"] },
       },
     })
     const originalView = structuredClone(view)
@@ -34,6 +34,7 @@ describe("resolveModelReferences", () => {
       model: "openai/gpt-5.6-sol",
       variant: "high",
       reasoningEffort: "xhigh",
+      models: [{ model: "openai/gpt-5.6-sol", variant: "high", reasoningEffort: "xhigh" }],
       fallback_models: [{ model: "openai/gpt-5.6-sol", variant: "high", reasoningEffort: "xhigh" }],
     })
     expect(view).toEqual(originalView)
@@ -55,6 +56,7 @@ describe("resolveModelReferences", () => {
       },
       categories: {
         deep: {
+          models: [{ model: "sol", variant: "minimal", reasoningEffort: "low" }],
           fallback_models: [{ model: "sol", variant: "medium", reasoningEffort: "high" }],
         },
       },
@@ -72,6 +74,9 @@ describe("resolveModelReferences", () => {
     ])
     expect(result.view.categories?.deep?.fallback_models).toEqual([
       { model: "openai/gpt-5.6-sol", variant: "medium", reasoningEffort: "high" },
+    ])
+    expect(result.view.categories?.deep?.models).toEqual([
+      { model: "openai/gpt-5.6-sol", variant: "minimal", reasoningEffort: "low" },
     ])
   })
 

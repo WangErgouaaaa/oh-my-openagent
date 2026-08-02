@@ -8,6 +8,7 @@ import { loadOmoOpenCodeConfigChain } from "../plugin-config/omo-config-chain"
 import { mergeConfigs } from "../plugin-config/config-merger"
 import { findUnknownKeyPaths } from "../plugin-config/unknown-key-diagnostics"
 import { OhMyOpenCodeConfigSchema, type OhMyOpenCodeConfig } from "./schema"
+import type { FallbackModelObject } from "./schema/fallback-models"
 
 export type PluginConfigValidation = {
   readonly valid: boolean
@@ -95,6 +96,135 @@ function protectUserFields(
   }
 }
 
+type ModelChainEntry = string | FallbackModelObject
+
+const LEGACY_REASONING_EFFORTS = new Set([
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+])
+
+const LEGACY_MODEL_FIELDS = [
+  "model",
+  "fallback_models",
+  "variant",
+  "reasoningEffort",
+  "temperature",
+  "top_p",
+  "maxTokens",
+  "thinking",
+  "providerOptions",
+  "textVerbosity",
+] as const
+
+function hasLegacyModelFields(holder: Record<string, unknown>): boolean {
+  return LEGACY_MODEL_FIELDS.some((field) => holder[field] !== undefined)
+}
+
+function mixedModelRepresentationMessages(config: OhMyOpenCodeConfig): readonly string[] {
+  const messages: string[] = []
+  for (const [section, holders] of [["agents", config.agents], ["categories", config.categories]] as const) {
+    if (holders === undefined) continue
+    for (const [name, holder] of Object.entries(holders)) {
+      if (holder !== undefined && Array.isArray(holder.models) && hasLegacyModelFields(holder as Record<string, unknown>)) {
+        messages.push(`${section}.${name}.models cannot be combined with legacy model fields`)
+      }
+    }
+  }
+  return messages
+}
+
+function toLegacyModelEntry(entry: string): string
+function toLegacyModelEntry(entry: FallbackModelObject): Record<string, unknown>
+function toLegacyModelEntry(entry: ModelChainEntry): string | Record<string, unknown>
+function toLegacyModelEntry(entry: ModelChainEntry): string | Record<string, unknown> {
+  if (typeof entry === "string") return entry
+
+  const {
+    reasoning,
+    max_tokens: maxTokens,
+    provider_options: providerOptions,
+    ...legacy
+  } = entry
+  const normalized: Record<string, unknown> = {
+    ...legacy,
+    ...(maxTokens === undefined ? {} : { maxTokens }),
+    ...(providerOptions === undefined ? {} : { providerOptions }),
+  }
+
+  if (reasoning === undefined) return normalized
+
+  delete normalized.variant
+  delete normalized.reasoningEffort
+  if (reasoning === "off" || reasoning === "none") {
+    normalized.reasoningEffort = "none"
+  } else if (reasoning !== "auto") {
+    normalized.variant = reasoning
+    if (LEGACY_REASONING_EFFORTS.has(reasoning)) normalized.reasoningEffort = reasoning
+  }
+  return normalized
+}
+
+function materializeModelHolder(holder: unknown): unknown {
+  if (typeof holder !== "object" || holder === null) return holder
+  const modelHolder = holder as Record<string, unknown>
+  if (!Array.isArray(modelHolder.models)) return holder
+  if (hasLegacyModelFields(modelHolder)) {
+    const { models: _models, ...legacyHolder } = modelHolder
+    return legacyHolder
+  }
+
+  const [primary, ...fallbacks] = modelHolder.models as ModelChainEntry[]
+  const {
+    model: _model,
+    fallback_models: _fallbackModels,
+    variant: _variant,
+    reasoningEffort: _reasoningEffort,
+    temperature: _temperature,
+    top_p: _topP,
+    maxTokens: _maxTokens,
+    thinking: _thinking,
+    providerOptions: _providerOptions,
+    textVerbosity: _textVerbosity,
+    ...rest
+  } = modelHolder
+  const primarySettings = primary === undefined
+    ? {}
+    : typeof primary === "string"
+      ? { model: primary }
+      : toLegacyModelEntry(primary)
+
+  return {
+    ...rest,
+    ...primarySettings,
+    fallback_models: fallbacks.map(toLegacyModelEntry),
+  }
+}
+
+function materializeModelChains(config: OhMyOpenCodeConfig): OhMyOpenCodeConfig {
+  if (config.agents === undefined && config.categories === undefined) return config
+
+  const agents = config.agents === undefined
+    ? undefined
+    : Object.fromEntries(
+        Object.entries(config.agents).map(([name, agent]) => [name, materializeModelHolder(agent)]),
+      ) as OhMyOpenCodeConfig["agents"]
+  const categories = config.categories === undefined
+    ? undefined
+    : Object.fromEntries(
+        Object.entries(config.categories).map(([name, category]) => [name, materializeModelHolder(category)]),
+      ) as OhMyOpenCodeConfig["categories"]
+
+  return {
+    ...config,
+    ...(agents === undefined ? {} : { agents }),
+    ...(categories === undefined ? {} : { categories }),
+  }
+}
+
 function migrateRalphLoopConfig(config: OhMyOpenCodeConfig): OhMyOpenCodeConfig {
   const legacy = config.ralph_loop
   if (legacy === undefined) return config
@@ -122,11 +252,14 @@ export function validatePluginConfig(
   const chain = loadOmoOpenCodeConfigChain(directory, environment)
   const views = chain.views.map((view) => parseConfigView(view.path, view.config))
   const chainMessages = chain.diagnostics.map((diagnostic) => `${shortPath(diagnostic.path)}: ${diagnostic.message}`)
-  const messages = [...chainMessages, ...views.flatMap((view) => view.messages)]
+  const parsedMessages = views.flatMap((view) => view.messages)
   const firstFailingView = views.find((view) => view.messages.length > 0)
   const firstView = views[0]
   const userConfig = parseConfig(chain.protectedUserView)
-  const config = applyDisabledProviders(protectUserFields(mergeViews(views), userConfig))
+  const mergedConfig = protectUserFields(mergeViews(views), userConfig)
+  const mixedMessages = mixedModelRepresentationMessages(mergedConfig)
+  const messages = [...chainMessages, ...parsedMessages, ...mixedMessages]
+  const config = materializeModelChains(applyDisabledProviders(mergedConfig))
 
   return {
     valid: messages.length === 0,

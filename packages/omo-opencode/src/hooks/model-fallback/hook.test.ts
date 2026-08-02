@@ -3,6 +3,7 @@
 import { unsafeTestValue } from "../../../../../test-support/unsafe-test-value"
 import { beforeEach, describe, expect, test } from "bun:test"
 import { _resetMemCacheForTesting, updateConnectedProvidersCache } from "../../shared/connected-providers-cache"
+import { clearAllSessionPromptParams, getSessionPromptParams } from "../../shared/session-prompt-params-state"
 
 type ChatMessageOutput = {
   message: Record<string, unknown>
@@ -30,6 +31,7 @@ describe("model fallback hook", () => {
   beforeEach(() => {
     modelFallback = createModelFallbackHook()
     _resetMemCacheForTesting()
+    clearAllSessionPromptParams()
   })
 
   test("applies pending fallback on chat.message by overriding model", async () => {
@@ -65,6 +67,51 @@ describe("model fallback hook", () => {
     expect(output.message["model"]).toEqual({
       providerID: "anthropic",
       modelID: "claude-opus-5",
+    })
+  })
+
+  test("applies fallback entry request settings to the retried session", async () => {
+    const sessionID = "ses_model_fallback_settings"
+    const hook = unsafeTestValue<{
+      "chat.message"?: (
+        input: { sessionID: string },
+        output: ChatMessageOutput,
+      ) => Promise<void>
+    }>(modelFallback)
+    setSessionFallbackChain(modelFallback, sessionID, [{
+      providers: ["provider-b"],
+      model: "fallback-model",
+      variant: "high",
+      reasoningEffort: "medium",
+      temperature: 0.3,
+      top_p: 0.7,
+      maxTokens: 8192,
+      providerOptions: { compatibility: "strict" },
+      thinking: { type: "enabled", budgetTokens: 4096 },
+    }])
+    expect(setPendingModelFallback(
+      modelFallback,
+      sessionID,
+      "Sisyphus - Ultraworker",
+      "provider-a",
+      "primary-model",
+    )).toBe(true)
+
+    const output: ChatMessageOutput = {
+      message: { model: { providerID: "provider-a", modelID: "primary-model" } },
+      parts: [{ type: "text", text: "continue" }],
+    }
+    await hook["chat.message"]?.({ sessionID }, output)
+
+    expect(getSessionPromptParams(sessionID)).toEqual({
+      temperature: 0.3,
+      topP: 0.7,
+      maxOutputTokens: 8192,
+      options: {
+        compatibility: "strict",
+        reasoningEffort: "medium",
+        thinking: { type: "enabled", budgetTokens: 4096 },
+      },
     })
   })
 

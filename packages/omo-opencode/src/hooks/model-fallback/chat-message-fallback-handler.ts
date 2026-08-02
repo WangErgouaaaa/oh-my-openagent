@@ -1,11 +1,13 @@
 import { log } from "../../shared/logger"
 import { getTaskToastManager } from "../../features/task-toast-manager"
 import type { ChatMessageHandlerOutput, ChatMessageInput } from "../../plugin/chat-message"
+import { applySessionPromptParams } from "../../shared/session-prompt-params-helpers"
+import type { ResolvedFallbackModel } from "./hook"
 
 export async function applyFallbackToChatMessage(params: {
   input: ChatMessageInput
   output: ChatMessageHandlerOutput
-  fallback: { providerID: string; modelID: string; variant?: string }
+  fallback: ResolvedFallbackModel
   toast?: (input: {
     title: string
     message: string
@@ -28,6 +30,7 @@ export async function applyFallbackToChatMessage(params: {
     providerID: fallback.providerID,
     modelID: fallback.modelID,
   }
+  applySessionPromptParams(sessionID, fallback)
   if (fallback.variant !== undefined) {
     output.message["variant"] = fallback.variant
   } else {

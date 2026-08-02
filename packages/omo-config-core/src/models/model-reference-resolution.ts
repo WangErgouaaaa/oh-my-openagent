@@ -142,6 +142,9 @@ function resolveCategoryDefinition(
     ...(definition.reasoningEffort === undefined && resolvedModel?.reasoningEffort !== undefined
       ? { reasoningEffort: resolvedModel.reasoningEffort }
       : {}),
+    ...(definition.models === undefined
+      ? {}
+      : { models: definition.models.map((entry) => resolveFallbackModelEntry(entry, catalog, cycleNames)) }),
     ...(definition.fallback_models === undefined
       ? {}
       : { fallback_models: resolveFallbackModels(definition.fallback_models, catalog, cycleNames) }),

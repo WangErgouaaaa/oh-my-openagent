@@ -199,6 +199,7 @@ describe("parseFallbackModelObjectEntry", () => {
         temperature: 0.3,
         top_p: 0.9,
         maxTokens: 8192,
+        providerOptions: { compatibility: "strict" },
         thinking: { type: "disabled" },
       },
       undefined,
@@ -211,6 +212,7 @@ describe("parseFallbackModelObjectEntry", () => {
       temperature: 0.3,
       top_p: 0.9,
       maxTokens: 8192,
+      providerOptions: { compatibility: "strict" },
       thinking: { type: "disabled" },
     })
   })

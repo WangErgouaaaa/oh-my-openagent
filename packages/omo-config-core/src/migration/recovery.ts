@@ -1,7 +1,8 @@
+import { moveMigrationBackup } from "./backup-move"
 import { prepareTargetWrite, targetDocument, writePreparedTarget } from "./commit"
 import { readMigrationJournal, removeMigrationJournal, writeMigrationJournal } from "./journal"
 import { hasMigrationMarker } from "./predicate"
-import { MigrationTransactionError, type MigrationClock, type MigrationEnvironment, type MigrationFileSystem, type MigrationProcess, type MigrationTargetWriter } from "./types"
+import type { MigrationClock, MigrationEnvironment, MigrationFileSystem, MigrationProcess, MigrationTargetWriter } from "./types"
 
 export function resumeMigrationJournal(input: {
   readonly clock: MigrationClock
@@ -37,14 +38,7 @@ export function resumeMigrationJournal(input: {
   for (const move of targetRecorded.backupMoves) {
     if (targetRecorded.completedMoves.includes(move.from)) continue
     input.renewLock()
-    if (input.fileSystem.existsSync(move.from)) {
-      if (input.fileSystem.existsSync(move.to)) {
-        throw new MigrationTransactionError(`Migration backup path already exists: ${move.to}`)
-      }
-      input.fileSystem.renameSync(move.from, move.to)
-    } else if (!input.fileSystem.existsSync(move.to)) {
-      throw new MigrationTransactionError(`Migration source and backup are both missing: ${move.from}`)
-    }
+    moveMigrationBackup(move, input.fileSystem, { allowExistingDestination: true })
     Object.assign(targetRecorded, { completedMoves: [...targetRecorded.completedMoves, move.from] })
     writeMigrationJournal(targetRecorded, input.fileSystem, input.env, input.process, input.clock)
   }

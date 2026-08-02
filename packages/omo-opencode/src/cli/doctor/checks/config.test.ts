@@ -1,4 +1,4 @@
-import { describe, it, expect } from "bun:test"
+import { afterEach, beforeEach, describe, it, expect } from "bun:test"
 import { mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -9,6 +9,18 @@ function normalizePathForAssertion(filePath: string): string {
 }
 
 describe("config check", () => {
+  let originalOmoConfig: string | undefined
+
+  beforeEach(() => {
+    originalOmoConfig = process.env.OMO_CONFIG
+    delete process.env.OMO_CONFIG
+  })
+
+  afterEach(() => {
+    if (originalOmoConfig === undefined) delete process.env.OMO_CONFIG
+    else process.env.OMO_CONFIG = originalOmoConfig
+  })
+
   describe("checkConfig", () => {
     it("returns a valid CheckResult", async () => {
       //#given config check is available
@@ -136,6 +148,7 @@ describe("config check", () => {
 
     it("does not flag configured custom providers as unavailable when they exist in opencode.json", async () => {
       const originalConfigDir = process.env.OPENCODE_CONFIG_DIR
+      const originalCwd = process.cwd()
       const originalXdgConfig = process.env.XDG_CONFIG_HOME
       const originalXdgCache = process.env.XDG_CACHE_HOME
       const originalHome = process.env.HOME
@@ -154,6 +167,7 @@ describe("config check", () => {
         process.env.HOME = testRootDir
         process.env.XDG_CONFIG_HOME = xdgConfigDir
         process.env.XDG_CACHE_HOME = xdgCacheDir
+        process.chdir(testRootDir)
 
         writeFileSync(
           join(testRootDir, ".omo", "omo.jsonc"),
@@ -189,6 +203,7 @@ describe("config check", () => {
 
         expect(providerIssue).toBeUndefined()
       } finally {
+        process.chdir(originalCwd)
         rmSync(testRootDir, { recursive: true, force: true })
         if (originalConfigDir === undefined) {
           delete process.env.OPENCODE_CONFIG_DIR

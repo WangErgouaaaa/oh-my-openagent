@@ -40,6 +40,7 @@ export function getNextReachableFallback(
   temperature?: number
   top_p?: number
   maxTokens?: number
+  providerOptions?: Record<string, unknown>
   thinking?: { type: "enabled" | "disabled"; budgetTokens?: number }
 } | null {
   const isReachable = createReachabilityChecker(state)
@@ -76,6 +77,7 @@ export function getNextReachableFallback(
       temperature: fallback.temperature,
       top_p: fallback.top_p,
       maxTokens: fallback.maxTokens,
+      providerOptions: fallback.providerOptions,
       thinking: fallback.thinking,
     }
   }

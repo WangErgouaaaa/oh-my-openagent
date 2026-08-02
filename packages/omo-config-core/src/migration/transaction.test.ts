@@ -1,8 +1,107 @@
 import { describe, expect, test } from "bun:test"
 import { runMigration, updateOmoConfig } from "../index"
-import { MemoryMigrationFileSystem, migrationFixture, parseFile } from "./migration-test-support"
+import {
+  CrossDeviceMigrationFileSystem,
+  MemoryMigrationFileSystem,
+  migrationFixture,
+  parseFile,
+} from "./migration-test-support"
 
 describe("runMigration transaction ownership", () => {
+  test("#given a legacy source on another filesystem #when migration archives it #then it copies the backup and completes", () => {
+    // given
+    const fileSystem = new CrossDeviceMigrationFileSystem()
+    const sourceContent = `{"legacy":true}`
+    const backupPath = `${migrationFixture.sourcePath}.bak.cross-device`
+    fileSystem.files.set(migrationFixture.sourcePath, sourceContent)
+    fileSystem.crossDeviceSources.add(migrationFixture.sourcePath)
+
+    // when
+    const result = runMigration({
+      env: migrationFixture.env,
+      fileSystem,
+      id: "cross-device",
+      pid: 100,
+      sources: [{ path: migrationFixture.sourcePath }],
+      targetPath: migrationFixture.targetPath,
+      transform: () => ({ task: { default_concurrency: 3 } }),
+    })
+
+    // then
+    expect(result.status).toBe("migrated")
+    expect(fileSystem.existsSync(migrationFixture.sourcePath)).toBe(false)
+    expect(fileSystem.readFileSync(backupPath, "utf-8")).toBe(sourceContent)
+    expect(fileSystem.existsSync("/home/alice/.omo/.migration-journal.json")).toBe(false)
+  })
+
+  test("#given a cross-device copy fails #when migration archives the source #then the source and journal remain recoverable", () => {
+    // given
+    const fileSystem = new CrossDeviceMigrationFileSystem()
+    const backupPath = `${migrationFixture.sourcePath}.bak.copy-failure`
+    fileSystem.files.set(migrationFixture.sourcePath, `{"legacy":true}`)
+    fileSystem.crossDeviceSources.add(migrationFixture.sourcePath)
+    const writeFileExclusiveSync = fileSystem.writeFileExclusiveSync.bind(fileSystem)
+    fileSystem.writeFileExclusiveSync = (path, content): void => {
+      if (path === backupPath) {
+        fileSystem.files.set(path, "partial")
+        const error = new Error("No space left while copying migration backup")
+        Object.defineProperty(error, "code", { value: "ENOSPC" })
+        throw error
+      }
+      writeFileExclusiveSync(path, content)
+    }
+
+    // when
+    const migrate = (): void => {
+      runMigration({
+        env: migrationFixture.env,
+        fileSystem,
+        id: "copy-failure",
+        pid: 100,
+        sources: [{ path: migrationFixture.sourcePath }],
+        targetPath: migrationFixture.targetPath,
+        transform: () => ({ task: { default_concurrency: 3 } }),
+      })
+    }
+
+    // then
+    expect(migrate).toThrow("No space left while copying migration backup")
+    expect(fileSystem.readFileSync(migrationFixture.sourcePath, "utf-8")).toBe(`{"legacy":true}`)
+    expect(fileSystem.existsSync(backupPath)).toBe(false)
+    expect(fileSystem.existsSync("/home/alice/.omo/.migration-journal.json")).toBe(true)
+  })
+
+  test("#given a backup destination appears after planning #when a fresh migration moves the source #then it rejects the destination and keeps the source", () => {
+    // given
+    const fileSystem = new CrossDeviceMigrationFileSystem()
+    const sourceContent = `{"legacy":true}`
+    const backupPath = `${migrationFixture.sourcePath}.bak.destination-race`
+    fileSystem.files.set(migrationFixture.sourcePath, sourceContent)
+    fileSystem.crossDeviceSources.add(migrationFixture.sourcePath)
+
+    // when
+    const migrate = (): void => {
+      runMigration({
+        env: migrationFixture.env,
+        fileSystem,
+        id: "destination-race",
+        onBoundary: (boundary) => {
+          if (boundary === "target-recorded") fileSystem.files.set(backupPath, sourceContent)
+        },
+        pid: 100,
+        sources: [{ backupPath, path: migrationFixture.sourcePath }],
+        targetPath: migrationFixture.targetPath,
+        transform: () => ({ task: { default_concurrency: 3 } }),
+      })
+    }
+
+    // then
+    expect(migrate).toThrow(`Migration backup path already exists: ${backupPath}`)
+    expect(fileSystem.readFileSync(migrationFixture.sourcePath, "utf-8")).toBe(sourceContent)
+    expect(fileSystem.readFileSync(backupPath, "utf-8")).toBe(sourceContent)
+    expect(fileSystem.existsSync("/home/alice/.omo/.migration-journal.json")).toBe(true)
+  })
+
   test("#given two callers overlap #when one holds the exclusive lock #then one migration commits and the other observes completed state on retry", () => {
     // given
     const fileSystem = new MemoryMigrationFileSystem()

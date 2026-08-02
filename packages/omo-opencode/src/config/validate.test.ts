@@ -8,6 +8,7 @@ import { validatePluginConfig } from "./validate"
 type EnvSnapshot = {
   readonly HOME: string | undefined
   readonly OCX_PROFILE: string | undefined
+  readonly OMO_CONFIG: string | undefined
   readonly OMO_PROFILE: string | undefined
   readonly OPENCODE_CONFIG_DIR: string | undefined
 }
@@ -17,7 +18,7 @@ type Fixture = {
   readonly root: string
 }
 
-const ENV_KEYS = ["HOME", "OCX_PROFILE", "OMO_PROFILE", "OPENCODE_CONFIG_DIR"] as const
+const ENV_KEYS = ["HOME", "OCX_PROFILE", "OMO_CONFIG", "OMO_PROFILE", "OPENCODE_CONFIG_DIR"] as const
 
 function restoreEnv(snapshot: EnvSnapshot): void {
   for (const key of ENV_KEYS) {
@@ -31,6 +32,7 @@ function withOmoConfig<T>(name: string, run: (fixture: Fixture) => T): T {
   const snapshot: EnvSnapshot = {
     HOME: process.env.HOME,
     OCX_PROFILE: process.env.OCX_PROFILE,
+    OMO_CONFIG: process.env.OMO_CONFIG,
     OMO_PROFILE: process.env.OMO_PROFILE,
     OPENCODE_CONFIG_DIR: process.env.OPENCODE_CONFIG_DIR,
   }
@@ -41,6 +43,7 @@ function withOmoConfig<T>(name: string, run: (fixture: Fixture) => T): T {
     mkdirSync(fixture.project, { recursive: true })
     process.env.HOME = root
     delete process.env.OCX_PROFILE
+    delete process.env.OMO_CONFIG
     delete process.env.OMO_PROFILE
     delete process.env.OPENCODE_CONFIG_DIR
     return run(fixture)
@@ -245,6 +248,122 @@ describe("validatePluginConfig", () => {
       const result = validatePluginConfig(fixture.project)
 
       expect(result.config.agents?.sisyphus?.model).toBe("provider/kimi")
+    })
+  })
+
+  it("#given catalog references in canonical model chains #when validating #then resolves agent and category entries", () => {
+    withOmoConfig("canonical-model-catalog", (fixture) => {
+      writeProjectConfig(fixture, {
+        models: {
+          primary: { model: "provider/primary" },
+          fallback: { model: "provider/fallback" },
+        },
+        "[opencode]": {
+          agents: { explore: { models: ["primary", "fallback"] } },
+          categories: { deep: { models: ["primary", "fallback"] } },
+        },
+      })
+
+      const result = validatePluginConfig(fixture.project)
+
+      expect(result.valid).toBe(true)
+      expect(result.config.agents?.explore).toMatchObject({
+        model: "provider/primary",
+        fallback_models: ["provider/fallback"],
+      })
+      expect(result.config.categories?.deep).toMatchObject({
+        model: "provider/primary",
+        fallback_models: ["provider/fallback"],
+      })
+    })
+  })
+
+  it("#given mixed canonical and legacy model representations #when validating #then rejects the ambiguity and preserves legacy runtime fields", () => {
+    withOmoConfig("mixed-model-representations", (fixture) => {
+      writeUserConfig(fixture, {
+        "[opencode]": {
+          agents: { explore: { models: ["user/primary", "user/fallback"] } },
+        },
+      })
+      writeProjectConfig(fixture, {
+        "[opencode]": {
+          agents: { explore: { model: "project/primary" } },
+        },
+      })
+
+      const result = validatePluginConfig(fixture.project)
+
+      expect(result.valid).toBe(false)
+      expect(result.messages.some((message) => message.includes("agents.explore.models cannot be combined with legacy model fields"))).toBe(true)
+      expect(result.config.agents?.explore?.model).toBe("project/primary")
+    })
+  })
+
+  it("#given an empty canonical model chain #when validating #then reports the schema error", () => {
+    withOmoConfig("empty-canonical-model-chain", (fixture) => {
+      writeProjectConfig(fixture, {
+        "[opencode]": { agents: { explore: { models: [] } } },
+      })
+
+      const result = validatePluginConfig(fixture.project)
+
+      expect(result.valid).toBe(false)
+      expect(result.messages.some((message) => message.includes("agents.explore.models"))).toBe(true)
+    })
+  })
+
+  it("#given canonical agent and category model chains #when validating #then materializes legacy runtime fields", () => {
+    withOmoConfig("canonical-model-chains", (fixture) => {
+      writeUserConfig(fixture, {
+        "[opencode]": {
+          agents: {
+            explore: {
+              models: [
+                {
+                  model: "provider/primary",
+                  reasoning: "high",
+                  max_tokens: 4096,
+                  provider_options: { compatibility: "strict" },
+                },
+                { model: "provider/fallback", reasoning: "low" },
+              ],
+            },
+          },
+          categories: {
+            deep: {
+              models: [
+                { model: "provider/category-primary", reasoning: "xhigh" },
+                "provider/category-fallback",
+              ],
+            },
+          },
+        },
+      })
+
+      const result = validatePluginConfig(fixture.project)
+
+      expect(result.valid).toBe(true)
+      expect(result.messages).toEqual([])
+      expect(result.config.agents?.explore).toMatchObject({
+        model: "provider/primary",
+        variant: "high",
+        reasoningEffort: "high",
+        maxTokens: 4096,
+        providerOptions: { compatibility: "strict" },
+        fallback_models: [
+          {
+            model: "provider/fallback",
+            variant: "low",
+            reasoningEffort: "low",
+          },
+        ],
+      })
+      expect(result.config.categories?.deep).toMatchObject({
+        model: "provider/category-primary",
+        variant: "xhigh",
+        reasoningEffort: "xhigh",
+        fallback_models: ["provider/category-fallback"],
+      })
     })
   })
 })

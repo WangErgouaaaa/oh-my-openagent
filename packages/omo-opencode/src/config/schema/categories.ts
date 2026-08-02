@@ -1,10 +1,12 @@
 import { z } from "zod"
-import { FallbackModelsSchema } from "./fallback-models"
+import { FallbackModelObjectSchema, FallbackModelsSchema } from "./fallback-models"
 
 export const CategoryConfigSchema = z.object({
   /** Human-readable description of the category's purpose. Shown in task prompt. */
   description: z.string().optional(),
   model: z.string().optional(),
+  /** Ordered model chain; the first entry is the primary model and the rest are fallbacks. */
+  models: z.array(z.union([z.string(), FallbackModelObjectSchema])).min(1).optional(),
   fallback_models: FallbackModelsSchema.optional(),
   variant: z.string().optional(),
   temperature: z.number().min(0).max(2).optional(),

@@ -10,11 +10,15 @@ export const OmoReasoningEffortSchema = z.enum(["none", "minimal", "low", "mediu
 
 export const OmoFallbackModelObjectSchema = z.object({
   model: z.string(),
+  reasoning: z.string().optional(),
   variant: z.string().optional(),
   reasoningEffort: OmoReasoningEffortSchema.optional(),
   temperature: z.number().min(0).max(2).optional(),
   top_p: z.number().min(0).max(1).optional(),
+  max_tokens: z.number().int().positive().optional(),
   maxTokens: z.number().optional(),
+  provider_options: z.record(z.string(), z.unknown()).optional(),
+  providerOptions: z.record(z.string(), z.unknown()).optional(),
   thinking: OmoThinkingConfigSchema.optional(),
 }).strict()
 
