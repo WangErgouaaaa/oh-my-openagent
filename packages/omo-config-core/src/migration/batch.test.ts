@@ -33,7 +33,7 @@ describe("runMigrations", () => {
     expect(fileSystem.existsSync(lockPath)).toBe(false)
   })
 
-  test("#given a pending journal #when plans are discovered #then recovery finishes before discovery and dry run creates no new migration writes", () => {
+  test("#given a pending journal #when dry run is requested #then source target and journal remain unchanged", () => {
     // given
     const fileSystem = new MemoryMigrationFileSystem()
     const backupPath = `${migrationFixture.sourcePath}.backup`
@@ -47,19 +47,12 @@ describe("runMigrations", () => {
       targetWritten: false,
       version: 1,
     })}\n`)
-    let discoveryAfterRecovery = false
+    const journalPath = migrationJournalPath(migrationFixture.env)
+    const journalContent = fileSystem.readFileSync(journalPath, "utf-8")
 
     // when
     const result = runMigrations({
-      discover: () => {
-        discoveryAfterRecovery = fileSystem.existsSync(backupPath) && !fileSystem.existsSync(migrationJournalPath(migrationFixture.env))
-        return [{
-          id: "preview",
-          sources: [{ path: "/legacy/preview.jsonc" }],
-          targetPath: migrationFixture.targetPath,
-          transform: () => ({ task: { default_concurrency: 4 } }),
-        }]
-      },
+      discover: () => [],
       dryRun: true,
       env: migrationFixture.env,
       fileSystem,
@@ -68,10 +61,11 @@ describe("runMigrations", () => {
     })
 
     // then
-    expect(discoveryAfterRecovery).toBe(true)
-    expect(result.journalResumed).toBe(true)
-    expect(result.results[0]?.status).toBe("skipped")
-    expect(parseFile(fileSystem, migrationFixture.targetPath).task).toEqual({ default_concurrency: 3 })
-    expect(fileSystem.existsSync("/legacy/preview.jsonc")).toBe(false)
+    expect(result.journalResumed).toBe(false)
+    expect(result.results).toEqual([])
+    expect(fileSystem.readFileSync(journalPath, "utf-8")).toBe(journalContent)
+    expect(fileSystem.readFileSync(migrationFixture.sourcePath, "utf-8")).toBe("{}")
+    expect(fileSystem.existsSync(backupPath)).toBe(false)
+    expect(fileSystem.existsSync(migrationFixture.targetPath)).toBe(false)
   })
 })

@@ -1,5 +1,10 @@
 import * as z from "zod"
-import { OmoFallbackModelsSchema, OmoReasoningEffortSchema, OmoThinkingConfigSchema } from "./fallback-models"
+import {
+  OmoFallbackModelObjectSchema,
+  OmoFallbackModelsSchema,
+  OmoReasoningEffortSchema,
+  OmoThinkingConfigSchema,
+} from "./fallback-models"
 
 /**
  * Category config intentionally keeps the OpenCode category key set verbatim.
@@ -10,6 +15,7 @@ import { OmoFallbackModelsSchema, OmoReasoningEffortSchema, OmoThinkingConfigSch
 export const OmoCategoryConfigSchema = z.object({
   description: z.string().optional(),
   model: z.string().optional(),
+  models: z.array(z.union([z.string(), OmoFallbackModelObjectSchema])).min(1).optional(),
   fallback_models: OmoFallbackModelsSchema.optional(),
   variant: z.string().optional(),
   temperature: z.number().min(0).max(2).optional(),

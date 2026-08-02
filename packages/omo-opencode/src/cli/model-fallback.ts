@@ -30,6 +30,7 @@ type CompatibleFallbackSettings = {
   temperature?: number
   top_p?: number
   maxTokens?: number
+  providerOptions?: FallbackModelObject["providerOptions"]
   thinking?: FallbackModelObject["thinking"]
 }
 
@@ -58,6 +59,7 @@ function resolveCompatibleFallbackSettings(
     ...(compatibility.temperature !== undefined ? { temperature: compatibility.temperature } : {}),
     ...(compatibility.topP !== undefined ? { top_p: compatibility.topP } : {}),
     ...(compatibility.maxTokens !== undefined ? { maxTokens: compatibility.maxTokens } : {}),
+    ...(desired.providerOptions !== undefined ? { providerOptions: desired.providerOptions } : {}),
     ...(compatibility.thinking !== undefined ? { thinking: compatibility.thinking as FallbackModelObject["thinking"] } : {}),
   }
 }
@@ -82,6 +84,7 @@ function toFallbackModelObject(entry: FallbackEntry, provider: string): Fallback
     temperature: entry.temperature,
     top_p: entry.top_p,
     maxTokens: entry.maxTokens,
+    providerOptions: entry.providerOptions,
     thinking: entry.thinking,
   })
 

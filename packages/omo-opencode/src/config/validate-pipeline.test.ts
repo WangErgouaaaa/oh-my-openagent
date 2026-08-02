@@ -8,6 +8,7 @@ import { validatePluginConfig } from "./validate"
 function withProjectConfig<T>(name: string, config: unknown, run: (project: string) => T): T {
   const home = process.env.HOME
   const ocxProfile = process.env.OCX_PROFILE
+  const omoConfig = process.env.OMO_CONFIG
   const omoProfile = process.env.OMO_PROFILE
   const root = mkdtempSync(join(tmpdir(), `omo-config-validate-pipeline-${name}-`))
   const project = join(root, "project")
@@ -15,6 +16,7 @@ function withProjectConfig<T>(name: string, config: unknown, run: (project: stri
   try {
     process.env.HOME = root
     delete process.env.OCX_PROFILE
+    delete process.env.OMO_CONFIG
     delete process.env.OMO_PROFILE
     mkdirSync(join(project, ".omo"), { recursive: true })
     writeFileSync(join(project, ".omo", "omo.jsonc"), `${JSON.stringify(config)}\n`, "utf-8")
@@ -25,6 +27,8 @@ function withProjectConfig<T>(name: string, config: unknown, run: (project: stri
     else process.env.HOME = home
     if (ocxProfile === undefined) delete process.env.OCX_PROFILE
     else process.env.OCX_PROFILE = ocxProfile
+    if (omoConfig === undefined) delete process.env.OMO_CONFIG
+    else process.env.OMO_CONFIG = omoConfig
     if (omoProfile === undefined) delete process.env.OMO_PROFILE
     else process.env.OMO_PROFILE = omoProfile
   }
@@ -56,6 +60,32 @@ describe("validatePluginConfig pipeline", () => {
       const result = validatePluginConfig(project)
 
       expect(result.config.agents?.sisyphus?.model).toBe("allowed/fallback")
+    })
+  })
+
+  it("#given a disabled provider in a canonical model chain #when validating #then selects the first allowed entry", () => {
+    withProjectConfig("disabled-provider-canonical-chain", {
+      "[opencode]": {
+        disabled_providers: ["blocked"],
+        agents: {
+          sisyphus: {
+            models: [
+              "blocked/primary",
+              { model: "allowed/fallback", reasoning: "medium" },
+            ],
+          },
+        },
+      },
+    }, (project) => {
+      const result = validatePluginConfig(project)
+
+      expect(result.valid).toBe(true)
+      expect(result.config.agents?.sisyphus).toMatchObject({
+        model: "allowed/fallback",
+        variant: "medium",
+        reasoningEffort: "medium",
+        fallback_models: [],
+      })
     })
   })
 

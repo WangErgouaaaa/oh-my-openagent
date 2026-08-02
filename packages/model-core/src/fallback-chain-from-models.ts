@@ -71,6 +71,7 @@ export function parseFallbackModelObjectEntry(
     temperature: obj.temperature,
     top_p: obj.top_p,
     maxTokens: obj.maxTokens,
+    providerOptions: obj.providerOptions,
     thinking: obj.thinking,
   }
 }

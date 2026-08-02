@@ -5,6 +5,7 @@ type PromptParamModel = {
   top_p?: number
   reasoningEffort?: string
   maxTokens?: number
+  providerOptions?: Record<string, unknown>
   thinking?: { type: "enabled" | "disabled"; budgetTokens?: number }
 }
 
@@ -18,6 +19,7 @@ export function applySessionPromptParams(
   }
 
   const promptOptions: Record<string, unknown> = {
+    ...model.providerOptions,
     ...(model.reasoningEffort ? { reasoningEffort: model.reasoningEffort } : {}),
     ...(model.thinking ? { thinking: model.thinking } : {}),
   }

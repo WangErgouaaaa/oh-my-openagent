@@ -88,6 +88,17 @@ export class MemoryMigrationFileSystem implements MigrationFileSystem {
   }
 }
 
+export class CrossDeviceMigrationFileSystem extends MemoryMigrationFileSystem {
+  readonly crossDeviceSources = new Set<string>()
+
+  override renameSync(oldPath: string, newPath: string): void {
+    if (this.crossDeviceSources.has(toPosixPath(oldPath))) {
+      throw fileError("EXDEV", `Cross-device rename from ${oldPath} to ${newPath}`)
+    }
+    super.renameSync(oldPath, newPath)
+  }
+}
+
 export const migrationFixture = {
   env: { HOME: "/home/alice" },
   sourcePath: "/legacy/config.jsonc",

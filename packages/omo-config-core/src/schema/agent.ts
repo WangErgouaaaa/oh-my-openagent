@@ -1,28 +1,21 @@
 import * as z from "zod"
 
-import { OmoReasoningEffortSchema } from "./fallback-models"
+import { OmoFallbackModelObjectSchema, OmoReasoningEffortSchema } from "./fallback-models"
 
 /**
  * An agent model chain entry. A bare string keeps every existing config parsing unchanged; the
- * object form adds the per-entry tuning an agent can actually apply. This is deliberately NARROWER
- * than a category `fallback_models` entry: agent resolution only threads `variant` and
- * `reasoningEffort` to the child, so accepting `temperature` / `maxTokens` / `thinking` here would
- * advertise fields that are silently dropped.
+ * object form shares the same request settings as category and fallback model entries.
  */
 export const OmoAgentModelEntrySchema = z.union([
   z.string(),
-  z.object({
-    model: z.string(),
-    variant: z.string().optional(),
-    reasoningEffort: OmoReasoningEffortSchema.optional(),
-  }).strict(),
+  OmoFallbackModelObjectSchema,
 ])
 
 export const OmoAgentDefSchema = z.object({
   description: z.string().optional(),
   prompt: z.string().optional(),
   model: z.string().optional(),
-  models: z.array(OmoAgentModelEntrySchema).optional(),
+  models: z.array(OmoAgentModelEntrySchema).min(1).optional(),
   variant: z.string().optional(),
   reasoningEffort: OmoReasoningEffortSchema.optional(),
   tools: z.record(z.string(), z.boolean()).optional(),

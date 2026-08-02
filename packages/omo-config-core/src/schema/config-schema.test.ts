@@ -10,6 +10,15 @@ describe("omo config schema", () => {
         deep: {
           description: "Deep analysis",
           model: "anthropic/claude",
+          models: [
+            "anthropic/claude",
+            {
+              model: "openai/gpt",
+              reasoning: "minimal",
+              max_tokens: 4096,
+              provider_options: { compatibility: "strict" },
+            },
+          ],
           fallback_models: ["openai/gpt"],
           variant: "high",
           temperature: 0.2,
@@ -61,6 +70,15 @@ describe("omo config schema", () => {
     expect(result.data.task?.default_concurrency).toBe(5)
     expect(result.data.task?.residency_max_children).toBe(8)
     expect(result.data.categories?.deep?.maxTokens).toBe(12000)
+    expect(result.data.categories?.deep?.models).toEqual([
+      "anthropic/claude",
+      {
+        model: "openai/gpt",
+        reasoning: "minimal",
+        max_tokens: 4096,
+        provider_options: { compatibility: "strict" },
+      },
+    ])
     expect(result.data.categories?.deep?.reasoningEffort).toBe("high")
     expect(result.data.categories?.deep?.textVerbosity).toBe("medium")
     expect(result.data.categories?.deep?.thinking?.budgetTokens).toBe(2048)

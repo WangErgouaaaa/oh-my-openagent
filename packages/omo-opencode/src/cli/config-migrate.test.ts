@@ -97,7 +97,7 @@ describe("runConfigMigrate", () => {
     expect(secondLines.join("\n")).toContain("Nothing to migrate")
   })
 
-  test("#given a pending journal #when dry run is requested #then it completes recovery before reporting no new migration", () => {
+  test("#given a pending journal #when dry run is requested #then it reports without mutating recovery state", () => {
     // given
     const fixture = createFixture()
     const journalPath = join(fixture.homeDir, ".omo", ".migration-journal.json")
@@ -111,6 +111,8 @@ describe("runConfigMigrate", () => {
       targetWritten: false,
       version: 1,
     }))
+    const journalContent = readFileSync(journalPath, "utf-8")
+    const sourceContent = readFileSync(fixture.sourcePath, "utf-8")
     const lines: string[] = []
 
     // when
@@ -123,8 +125,10 @@ describe("runConfigMigrate", () => {
 
     // then
     expect(exitCode).toBe(0)
-    expect(existsSync(journalPath)).toBe(false)
-    expect(existsSync(join(fixture.homeDir, ".omo", "backup.json"))).toBe(true)
-    expect(lines.join("\n")).toContain("Recovered pending migration")
+    expect(readFileSync(journalPath, "utf-8")).toBe(journalContent)
+    expect(readFileSync(fixture.sourcePath, "utf-8")).toBe(sourceContent)
+    expect(existsSync(join(fixture.homeDir, ".omo", "backup.json"))).toBe(false)
+    expect(existsSync(fixture.targetPath)).toBe(false)
+    expect(lines.join("\n")).not.toContain("Recovered pending migration")
   })
 })
