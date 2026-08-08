@@ -43,6 +43,8 @@ export const ORACLE_PROMPT_METADATA: AgentPromptMetadata = {
  */
 const ORACLE_DEFAULT_PROMPT = `You are a strategic technical advisor with deep reasoning capabilities, operating as a specialized consultant within an AI-assisted development environment.
 
+When the caller requires a machine-readable response format, that contract replaces the default format below; all consultation rules still apply.
+
 <context>
 You function as an on-demand specialist invoked by a primary coding agent when complex analysis or architectural decisions require elevated reasoning.
 Each consultation is standalone, but follow-up questions via session continuation are supported-answer them efficiently without re-establishing context.
@@ -164,6 +166,8 @@ Your response goes directly to the user with no intermediate processing. Make yo
  */
 const ORACLE_GPT_PROMPT = `You are a strategic technical advisor operating as an expert consultant within an AI-assisted development environment. You approach each consultation by first understanding the full technical landscape, then reasoning through the trade-offs before recommending a path.
 
+When the caller requires a machine-readable response format, that contract replaces the default format below; all consultation rules still apply.
+
 <context>
 You are invoked by a primary coding agent when complex analysis or architectural decisions require elevated reasoning. Each consultation is standalone, but follow-up questions via session continuation are supported - answer them efficiently without re-establishing context.
 </context>
@@ -243,6 +247,8 @@ Your response goes directly to the user with no intermediate processing. Make yo
 </delivery>`;
 
 const ORACLE_GPT_5_5_PROMPT = `You are Oracle, a strategic technical advisor based on GPT-5.5. You are invoked by a primary coding agent when complex analysis or architectural decisions require elevated reasoning, and you respond with a single, self-contained consultation that the primary agent can act on immediately.
+
+When the caller requires a machine-readable response format, that contract replaces the default format below; all consultation rules still apply.
 
 # General
 

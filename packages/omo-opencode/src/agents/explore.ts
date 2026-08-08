@@ -39,6 +39,8 @@ export function createExploreAgent(model: string): AgentConfig {
     ...restrictions,
     prompt: `You are a codebase search specialist. Your job: find files and code, return actionable results.
 
+When the caller requires a machine-readable response format, that contract replaces the default format below; all exploration rules still apply.
+
 ## Your Mission
 
 Answer questions like:
