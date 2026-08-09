@@ -46,6 +46,208 @@ describe("processMessages", () => {
     expect(result).toBe(finalJson)
   })
 
+  test("structured output reads the native StructuredOutput result without a text wrapper", async () => {
+    const sessionID = "structured-native-result-test"
+    resetMessageCursor(sessionID)
+    const structured = {
+      artifact_kind: "thinker_raw_verdict_v21",
+      role: "explore",
+      status: "completed",
+    }
+    const messages = [
+      {
+        info: {
+          id: "assistant-final",
+          role: "assistant",
+          parentID: "current-user",
+          time: { created: 1 },
+          structured,
+        },
+        parts: [{
+          type: "tool",
+          tool: "StructuredOutput",
+          state: { status: "completed" },
+        }],
+      },
+    ]
+
+    const result = await processMessages(
+      sessionID,
+      createContext(messages) as never,
+      {
+        expectedPromptMessageID: "current-user",
+        expectedArtifactKind: "thinker_raw_verdict_v21",
+      },
+    )
+
+    expect(result).toBe(JSON.stringify(structured))
+  })
+
+  test("structured output rejects multiple native results linked to one prompt", async () => {
+    const sessionID = "structured-duplicate-native-results-test"
+    resetMessageCursor(sessionID)
+    const messages = [
+      {
+        info: {
+          id: "assistant-first",
+          role: "assistant",
+          parentID: "current-user",
+          time: { created: 1 },
+          structured: { artifact_kind: "thinker_raw_verdict_v21", role: "explore" },
+        },
+      },
+      {
+        info: {
+          id: "assistant-second",
+          role: "assistant",
+          parentID: "current-user",
+          time: { created: 2 },
+          structured: { artifact_kind: "thinker_raw_verdict_v21", role: "oracle" },
+        },
+      },
+    ]
+
+    await expect(processMessages(
+      sessionID,
+      createContext(messages) as never,
+      {
+        expectedPromptMessageID: "current-user",
+        expectedArtifactKind: "thinker_raw_verdict_v21",
+      },
+    )).rejects.toThrow("exactly one final assistant response")
+  })
+
+  test("structured output rejects mixed native and text-wrapper results for one prompt", async () => {
+    const sessionID = "structured-mixed-native-text-results-test"
+    resetMessageCursor(sessionID)
+    const messages = [
+      {
+        info: {
+          id: "assistant-native",
+          role: "assistant",
+          parentID: "current-user",
+          time: { created: 1 },
+          structured: { artifact_kind: "thinker_raw_verdict_v21", role: "explore" },
+        },
+      },
+      {
+        info: {
+          id: "assistant-text",
+          role: "assistant",
+          parentID: "current-user",
+          time: { created: 2 },
+        },
+        parts: [{
+          type: "text",
+          text: "```json\n{\"artifact_kind\":\"thinker_raw_verdict_v21\",\"role\":\"oracle\"}\n```",
+        }],
+      },
+    ]
+
+    await expect(processMessages(
+      sessionID,
+      createContext(messages) as never,
+      {
+        expectedPromptMessageID: "current-user",
+        expectedArtifactKind: "thinker_raw_verdict_v21",
+      },
+    )).rejects.toThrow("exactly one final assistant response")
+  })
+
+  test("structured output rejects a native result mixed with a wrong-artifact text result", async () => {
+    const sessionID = "structured-native-wrong-artifact-text-test"
+    resetMessageCursor(sessionID)
+    const messages = [
+      {
+        info: {
+          id: "assistant-native",
+          role: "assistant",
+          parentID: "current-user",
+          time: { created: 1 },
+          structured: { artifact_kind: "thinker_raw_verdict_v21", role: "explore" },
+        },
+      },
+      {
+        info: { id: "assistant-text", role: "assistant", parentID: "current-user", time: { created: 2 } },
+        parts: [{
+          type: "text",
+          text: "```json\n{\"artifact_kind\":\"unexpected\",\"role\":\"oracle\"}\n```",
+        }],
+      },
+    ]
+
+    await expect(processMessages(
+      sessionID,
+      createContext(messages) as never,
+      {
+        expectedPromptMessageID: "current-user",
+        expectedArtifactKind: "thinker_raw_verdict_v21",
+      },
+    )).rejects.toThrow("must declare artifact_kind thinker_raw_verdict_v21")
+  })
+
+  test("structured output rejects a native result mixed with a malformed JSON fence", async () => {
+    const sessionID = "structured-native-malformed-fence-test"
+    resetMessageCursor(sessionID)
+    const messages = [
+      {
+        info: {
+          id: "assistant-native",
+          role: "assistant",
+          parentID: "current-user",
+          time: { created: 1 },
+          structured: { artifact_kind: "thinker_raw_verdict_v21", role: "explore" },
+        },
+      },
+      {
+        info: { id: "assistant-text", role: "assistant", parentID: "current-user", time: { created: 2 } },
+        parts: [{
+          type: "text",
+          text: "```json\n{\"artifact_kind\":\"thinker_raw_verdict_v21\"",
+        }],
+      },
+    ]
+
+    await expect(processMessages(
+      sessionID,
+      createContext(messages) as never,
+      {
+        expectedPromptMessageID: "current-user",
+        expectedArtifactKind: "thinker_raw_verdict_v21",
+      },
+    )).rejects.toThrow("must be one JSON mapping")
+  })
+
+  test("structured output rejects two text results when either result is invalid", async () => {
+    const sessionID = "structured-valid-invalid-text-results-test"
+    resetMessageCursor(sessionID)
+    const messages = [
+      {
+        info: { id: "assistant-valid", role: "assistant", parentID: "current-user", time: { created: 1 } },
+        parts: [{
+          type: "text",
+          text: "```json\n{\"artifact_kind\":\"thinker_raw_verdict_v21\",\"role\":\"explore\"}\n```",
+        }],
+      },
+      {
+        info: { id: "assistant-invalid", role: "assistant", parentID: "current-user", time: { created: 2 } },
+        parts: [{
+          type: "text",
+          text: "```json\n{\"artifact_kind\":\"unexpected\",\"role\":\"oracle\"}\n```",
+        }],
+      },
+    ]
+
+    await expect(processMessages(
+      sessionID,
+      createContext(messages) as never,
+      {
+        expectedPromptMessageID: "current-user",
+        expectedArtifactKind: "thinker_raw_verdict_v21",
+      },
+    )).rejects.toThrow("must declare artifact_kind thinker_raw_verdict_v21")
+  })
+
   test("structured output extracts one JSON mapping from a native agent wrapper", async () => {
     const sessionID = "structured-native-wrapper-test"
     resetMessageCursor(sessionID)

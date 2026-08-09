@@ -4,6 +4,7 @@ import {
   subagentSessions,
   syncSubagentSessions,
 } from "../../features/claude-code-session-state"
+import { waitForCompletion } from "./completion-poller"
 import { executeSync } from "./sync-executor"
 
 type ExecuteSyncArgs = Parameters<typeof executeSync>[0]
@@ -29,10 +30,14 @@ function createToolContext(): ExecuteSyncToolContext {
   }
 }
 
-function createContext(promptAsync: ReturnType<typeof mock>) {
+function createContext(
+  promptAsync: ReturnType<typeof mock>,
+  abort = mock(async () => ({ data: true })),
+) {
   return {
     client: {
       session: {
+        abort,
         prompt: promptAsync,
         promptAsync,
       },
@@ -93,6 +98,21 @@ describe("executeSync session cleanup", () => {
       expect(syncSubagentSessions.has(sessionID)).toBe(false)
     })
 
+    test("#when prompt dispatch fails #then the child session is not aborted", async () => {
+      const abort = mock(async () => ({ data: true }))
+      const result = await executeSync(
+        createArgs(),
+        createToolContext(),
+        createContext(mock(async () => {
+          throw new Error("prompt rejected")
+        }), abort) as never,
+        createDependencies(),
+      )
+
+      expect(result).toContain("Error: Failed to send prompt: prompt rejected")
+      expect(abort).not.toHaveBeenCalled()
+    })
+
     test("#when execution throws an error #then sessionID is still removed from both Sets", async () => {
       // given
       const sessionID = "ses-cleanup-error"
@@ -133,6 +153,139 @@ describe("executeSync session cleanup", () => {
       expect(subagentSessions.has(sessionID)).toBe(false)
       expect(syncSubagentSessions.has(sessionID)).toBe(false)
     })
+
+    test("#when a structured review times out #then the exact child session is aborted", async () => {
+      const sessionID = "ses-structured-timeout"
+      const abort = mock(async () => ({ data: true }))
+      const deps = createDependencies({
+        createOrGetSession: mock(async () => ({ sessionID, isNew: true })),
+        waitForCompletion: mock(async () => {
+          throw new Error("Agent task timed out after 10 minutes.")
+        }),
+      })
+
+      const result = await executeSync(
+        { ...createArgs(), response_mode: "thinker_v21" },
+        createToolContext(),
+        createContext(mock(async (input: { body: { messageID: string } }) => ({
+          data: { info: { parentID: input.body.messageID } },
+        })), abort) as never,
+        deps,
+      )
+
+      expect(result).toContain("Agent task timed out after 10 minutes.")
+      expect(abort).toHaveBeenCalledTimes(1)
+      expect(abort).toHaveBeenCalledWith({ path: { id: sessionID } })
+    })
+
+    test.each([
+      ["returns an SDK error", async () => ({ error: "abort denied" }), false],
+      ["rejects", async () => { throw new Error("abort transport failed") }, false],
+      ["times out", async () => new Promise<never>(() => {}), true],
+    ])("#when completion polling fails and child abort %s #then both failures are surfaced", async (
+      _case,
+      abortImplementation,
+      forceAbortTimeout,
+    ) => {
+      const sessionID = "ses-abort-cleanup-failure"
+      const abort = mock(abortImplementation)
+      const originalSetTimeout = globalThis.setTimeout
+      if (forceAbortTimeout) {
+        globalThis.setTimeout = ((handler: TimerHandler) => {
+          if (typeof handler === "function") handler()
+          return originalSetTimeout(() => {}, 0)
+        }) as typeof globalThis.setTimeout
+      }
+
+      try {
+        const execution = executeSync(
+          { ...createArgs(), response_mode: "thinker_v21" },
+          createToolContext(),
+          createContext(mock(async (input: { body: { messageID: string } }) => ({
+            data: { info: { parentID: input.body.messageID } },
+          })), abort) as never,
+          createDependencies({
+            createOrGetSession: mock(async () => ({ sessionID, isNew: true })),
+            waitForCompletion: mock(async () => {
+              throw new Error("polling failed")
+            }),
+          }),
+        )
+
+        await expect(execution).rejects.toThrow(
+          `Failed to abort child session ${sessionID} after completion polling failed: polling failed`,
+        )
+      } finally {
+        globalThis.setTimeout = originalSetTimeout
+      }
+      expect(abort).toHaveBeenCalledWith({ path: { id: sessionID } })
+    })
+
+    test("#when cancellation arrives during the final message read #then the exact child session is aborted", async () => {
+      const sessionID = "ses-cancel-during-final-read"
+      const abortController = new AbortController()
+      const abort = mock(async () => ({ data: true }))
+      let promptMessageID = ""
+      const promptAsync = mock(async (input: { body: { messageID: string } }) => {
+        promptMessageID = input.body.messageID
+        return { data: { info: { parentID: promptMessageID } } }
+      })
+      let messageReads = 0
+      const context = {
+        client: {
+          session: {
+            abort,
+            prompt: promptAsync,
+            promptAsync,
+            status: mock(async () => ({ data: { [sessionID]: { type: "idle" } } })),
+            messages: mock(async () => {
+              if (!promptMessageID) return { data: [] }
+              messageReads += 1
+              if (messageReads === 4) abortController.abort()
+              return {
+                data: [
+                  { info: { id: promptMessageID, role: "user" } },
+                  { info: { id: "answer", role: "assistant", parentID: promptMessageID } },
+                ],
+              }
+            }),
+          },
+        },
+      }
+
+      const result = await executeSync(
+        { ...createArgs(), response_mode: "thinker_v21" },
+        { ...createToolContext(), abort: abortController.signal },
+        context as never,
+        createDependencies({
+          createOrGetSession: mock(async () => ({ sessionID, isNew: true })),
+          waitForCompletion,
+        }),
+      )
+
+      expect(result).toContain("Task aborted.")
+      expect(abort).toHaveBeenCalledTimes(1)
+      expect(abort).toHaveBeenCalledWith({ path: { id: sessionID } })
+    })
+
+    test("#when structured response processing fails #then the completed child session is not aborted", async () => {
+      const abort = mock(async () => ({ data: true }))
+      const result = await executeSync(
+        { ...createArgs(), response_mode: "thinker_v21" },
+        createToolContext(),
+        createContext(mock(async (input: { body: { messageID: string } }) => ({
+          data: { info: { parentID: input.body.messageID } },
+        })), abort) as never,
+        createDependencies({
+          processMessages: mock(async () => {
+            throw new Error("invalid structured response")
+          }),
+        }),
+      )
+
+      expect(result).toContain("Error: invalid structured response")
+      expect(abort).not.toHaveBeenCalled()
+    })
   })
 
   describe("#given executeSync reuses an existing session", () => {
@@ -161,6 +314,28 @@ describe("executeSync session cleanup", () => {
       expect(result).toContain(`session_id: ${sessionID}`)
       expect(subagentSessions.has(sessionID)).toBe(true)
       expect(syncSubagentSessions.has(sessionID)).toBe(true)
+    })
+
+    test("#when completion polling fails #then the exact reused session is aborted", async () => {
+      const sessionID = "ses-reused-timeout"
+      const abort = mock(async () => ({ data: true }))
+      const result = await executeSync(
+        { ...createArgs(), session_id: sessionID, response_mode: "thinker_v21" },
+        createToolContext(),
+        createContext(mock(async (input: { body: { messageID: string } }) => ({
+          data: { info: { parentID: input.body.messageID } },
+        })), abort) as never,
+        createDependencies({
+          createOrGetSession: mock(async () => ({ sessionID, isNew: false })),
+          waitForCompletion: mock(async () => {
+            throw new Error("reused session poll failed")
+          }),
+        }),
+      )
+
+      expect(result).toContain("Error: reused session poll failed")
+      expect(abort).toHaveBeenCalledTimes(1)
+      expect(abort).toHaveBeenCalledWith({ path: { id: sessionID } })
     })
 
     test("#when execution applies a fallback chain #then it clears that chain in finally", async () => {

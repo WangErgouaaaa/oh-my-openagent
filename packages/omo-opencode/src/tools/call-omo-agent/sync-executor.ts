@@ -1,4 +1,5 @@
 import type { PluginInput } from "@opencode-ai/plugin"
+import { abortWithTimeout } from "../../features/background-agent/abort-with-timeout"
 import { clearSessionAgent, handedBackSyncSessions, setSessionAgent, subagentSessions, syncSubagentSessions } from "../../features/claude-code-session-state"
 import { generateMessageId } from "../../features/hook-message-injector/id-generation"
 import { dispatchInternalPrompt, isInternalPromptDispatchAccepted } from "../../hooks/shared/prompt-async-gate"
@@ -160,9 +161,43 @@ export async function executeSync(
   let appliedFallbackChain = false
   let baselineMessageKeys: ReadonlySet<string> = new Set()
   let promptMessageID: string | undefined
+  let abortSessionOnExit = false
+  let completionPollingError: unknown
 
   try {
     const structuredReviewProtocol = resolveStructuredReviewProtocol(args)
+    const structuredReviewSystem = structuredReviewProtocol
+      ? [
+          "The caller selected a strict structured reviewer response mode.",
+          "This contract overrides the agent's default final response format.",
+          "Complete the requested review, then use StructuredOutput exactly once for the final response.",
+          "The StructuredOutput schema enforces transport only; include every field required by the caller prompt.",
+          "Do not emit XML, Markdown, code fences, analysis, or a plain-text final response.",
+        ].join("\n")
+      : undefined
+    const structuredReviewFormat = structuredReviewProtocol
+      ? {
+          type: "json_schema",
+          schema: {
+            type: "object",
+            properties: {
+              artifact_kind: {
+                type: "string",
+                enum: [structuredReviewProtocol.expectedArtifactKind],
+              },
+            },
+            required: ["artifact_kind"],
+          },
+        }
+      : undefined
+    const promptModel = structuredReviewProtocol && model?.providerID === "deepseek"
+      ? {
+          ...model,
+          variant: undefined,
+          reasoningEffort: undefined,
+          thinking: { type: "disabled" as const },
+        }
+      : model
     const session = await deps.createOrGetSession(args, toolContext, ctx, model)
     sessionID = session.sessionID
     createdSessionForExecution = session.isNew
@@ -178,7 +213,7 @@ export async function executeSync(
       appliedFallbackChain = true
     }
 
-    applySessionPromptParams(sessionID, model)
+    applySessionPromptParams(sessionID, promptModel)
 
     await Promise.resolve(
       toolContext.metadata?.({
@@ -201,6 +236,8 @@ export async function executeSync(
       sessionID,
       promptText: args.prompt,
       fallbackChain,
+      format: structuredReviewFormat,
+      system: structuredReviewSystem,
       tools: promptTools,
     })
 
@@ -223,11 +260,13 @@ export async function executeSync(
           body: {
             messageID: promptMessageID,
             agent: promptAgent,
+            ...(structuredReviewFormat ? { format: structuredReviewFormat } : {}),
+            ...(structuredReviewSystem ? { system: structuredReviewSystem } : {}),
             tools: promptTools,
             parts: [{ type: "text", text: args.prompt }],
-            ...(model ? { model: { providerID: model.providerID, modelID: model.modelID } } : {}),
-            ...(model?.variant ? { variant: model.variant } : {}),
-            ...buildPromptGenerationParams(model),
+            ...(promptModel ? { model: { providerID: promptModel.providerID, modelID: promptModel.modelID } } : {}),
+            ...(promptModel?.variant ? { variant: promptModel.variant } : {}),
+            ...buildPromptGenerationParams(promptModel),
           },
         },
       })
@@ -267,17 +306,23 @@ export async function executeSync(
     }
 
     try {
-      if (structuredReviewProtocol) {
-        await deps.waitForCompletion(sessionID, toolContext, ctx, {
-          maxPollTimeMs: 10 * 60 * 1000,
-          baselineMessageKeys,
-          expectedPromptMessageID: promptMessageID,
-        })
-      } else {
-        await deps.waitForCompletion(sessionID, toolContext, ctx, {
-          baselineMessageKeys,
-          expectedPromptMessageID: promptMessageID,
-        })
+      try {
+        if (structuredReviewProtocol) {
+          await deps.waitForCompletion(sessionID, toolContext, ctx, {
+            maxPollTimeMs: 10 * 60 * 1000,
+            baselineMessageKeys,
+            expectedPromptMessageID: promptMessageID,
+          })
+        } else {
+          await deps.waitForCompletion(sessionID, toolContext, ctx, {
+            baselineMessageKeys,
+            expectedPromptMessageID: promptMessageID,
+          })
+        }
+      } catch (error) {
+        abortSessionOnExit = true
+        completionPollingError = error
+        throw error
       }
 
       const responseText = await deps.processMessages(sessionID, ctx, {
@@ -299,12 +344,25 @@ export async function executeSync(
     spawnReservation?.rollback()
     throw error
   } finally {
+    let abortCleanupError: Error | undefined
     if (sessionID && appliedFallbackChain) {
       deps.clearSessionFallbackChain(sessionID)
     }
 
     if (sessionID) {
       clearDelegatedChildSessionBootstrap(sessionID)
+      if (abortSessionOnExit) {
+        const aborted = typeof ctx.client.session.abort === "function"
+          && await abortWithTimeout(ctx.client, sessionID)
+        if (!aborted) {
+          const pollingMessage = completionPollingError instanceof Error
+            ? completionPollingError.message
+            : String(completionPollingError)
+          abortCleanupError = new Error(
+            `Failed to abort child session ${sessionID} after completion polling failed: ${pollingMessage}`,
+          )
+        }
+      }
     }
 
     if (sessionID && createdSessionForExecution) {
@@ -314,5 +372,6 @@ export async function executeSync(
       clearSessionAgent(sessionID)
       handedBackSyncSessions.add(sessionID)
     }
+    if (abortCleanupError) throw abortCleanupError
   }
 }

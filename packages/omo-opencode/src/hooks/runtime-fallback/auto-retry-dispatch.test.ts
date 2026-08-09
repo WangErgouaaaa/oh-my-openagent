@@ -1,9 +1,14 @@
 import { afterEach, describe, expect, test } from "bun:test"
 
+import {
+  clearAllDelegatedChildSessionBootstrap,
+  registerDelegatedChildSessionBootstrap,
+} from "../../shared/delegated-child-session-bootstrap"
 import { DEFAULT_PROMPT_QUEUE_RETRY_MS, releaseAllPromptAsyncReservationsForTesting } from "../../shared/prompt-async-gate"
 import { setPromptReservation } from "../../shared/prompt-async-gate/reservations"
 import { createAutoRetryHelpers } from "./auto-retry"
 import { createFallbackState } from "./fallback-state"
+import { getLastUserRetryPayload } from "./last-user-retry-parts"
 import { installRuntimeFallbackTestClock, restoreRuntimeFallbackTestClock } from "./test-timeout-clock.test-support"
 import type { HookDeps, RuntimeFallbackPluginInput } from "./types"
 
@@ -77,8 +82,34 @@ async function flushPromptGateMicrotasks(): Promise<void> {
 
 describe("createAutoRetryDispatcher reserved-session retry (#5109)", () => {
   afterEach(() => {
+    clearAllDelegatedChildSessionBootstrap()
     releaseAllPromptAsyncReservationsForTesting()
     restoreRuntimeFallbackTestClock()
+  })
+
+  test("#given a delegated structured child #when two fallbacks read its retry payload #then both preserve the same format, system, and tools", () => {
+    const sessionID = "session-repeated-structured-fallback"
+    registerDelegatedChildSessionBootstrap({
+      sessionID,
+      promptText: "review this change",
+      format: { type: "json_schema", schema: { type: "object" } },
+      system: "return only the caller-defined response",
+      tools: { call_omo_agent: false, question: false, task: false },
+    })
+    const messages = {
+      data: [{
+        info: {
+          role: "user",
+          format: { type: "json_schema", schema: { type: "object" }, retryCount: 1 },
+        },
+        parts: [{ type: "text", text: "review this change" }],
+      }],
+    }
+
+    const first = getLastUserRetryPayload(messages, sessionID)
+    const second = getLastUserRetryPayload(messages, sessionID)
+
+    expect(second).toEqual(first)
   })
 
   test("#given a stale promptAsync reservation that releases shortly after #when auto retry runs #then the fallback dispatch is retried instead of silently abandoned", async () => {
