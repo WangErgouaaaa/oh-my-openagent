@@ -21,9 +21,7 @@ export async function captureMessageBaseline(
   if (messagesResult.error) {
     throw new Error(`Failed to get messages: ${messagesResult.error}`)
   }
-  const messages = normalizeSDKResponse(messagesResult, [] as CompletionMessage[], {
-    preferResponseOnMissingData: true,
-  })
+  const messages = normalizeSDKResponse(messagesResult, [] as CompletionMessage[])
   return new Set(messages.map((message, index) => buildMessageKey(message, index)))
 }
 
@@ -70,9 +68,10 @@ export async function waitForCompletion(
     }
 
     const messagesCheck = await ctx.client.session.messages({ path: { id: sessionID } })
-    const msgs = normalizeSDKResponse(messagesCheck, [] as CompletionMessage[], {
-      preferResponseOnMissingData: true,
-    })
+    if (messagesCheck.error) {
+      throw new Error(`Failed to get messages: ${messagesCheck.error}`)
+    }
+    const msgs = normalizeSDKResponse(messagesCheck, [] as CompletionMessage[])
     const freshMessages = options.baselineMessageKeys
       ? msgs.filter((message, index) => !options.baselineMessageKeys?.has(buildMessageKey(message, index)))
       : msgs

@@ -63,6 +63,33 @@ describe("waitForCompletion", () => {
     }
   })
 
+  test("#given OpenCode rejects persisted structured message metadata #when polling #then it reports the SDK error instead of treating it as an array", async () => {
+    // given
+    const originalSetTimeout = globalThis.setTimeout
+    globalThis.setTimeout = ((handler: TimerHandler) => {
+      if (typeof handler === "function") {
+        handler()
+      }
+      return originalSetTimeout(() => {}, 0)
+    }) as typeof globalThis.setTimeout
+
+    const status = mock(async () => ({ data: { "ses-invalid-format": { type: "idle" } } }))
+    const messages = mock(async () => ({
+      error: "invalid persisted structured format",
+    }))
+
+    try {
+      // when / then
+      await expect(waitForCompletion(
+        "ses-invalid-format",
+        createToolContext(),
+        createContext({ status, messages }),
+      )).rejects.toThrow("Failed to get messages: invalid persisted structured format")
+    } finally {
+      globalThis.setTimeout = originalSetTimeout
+    }
+  })
+
   test("#given the child session has durable messages #when it stays idle and stable #then completion succeeds", async () => {
     // given
     const originalDateNow = Date.now

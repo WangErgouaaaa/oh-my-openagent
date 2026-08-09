@@ -70,6 +70,13 @@ export function createAutoRetryDispatcher(
         query: { directory: ctx.directory },
       })
       const retryPayload = getLastUserRetryPayload(messagesResp, sessionID)
+      const retryModelGenerationPayload =
+        retryPayload.format && retryModelPayload.model.providerID === "deepseek"
+          ? {
+              model: retryModelPayload.model,
+              options: { thinking: { type: "disabled" } },
+            }
+          : retryModelPayload
       const originalRetryMetadata = resolveOriginalUserRetryMetadata(messagesResp)
       const fetchedParts = originalRetryMetadata.parts.length > 0
         ? originalRetryMetadata.parts
@@ -107,7 +114,7 @@ export function createAutoRetryDispatcher(
         path: { id: sessionID },
         body: {
           ...(launchAgent ? { agent: launchAgent } : {}),
-          ...retryModelPayload,
+          ...retryModelGenerationPayload,
           ...(retryPayload.format ? { format: retryPayload.format } : {}),
           ...(retryPayload.system ? { system: retryPayload.system } : {}),
           ...(retryPayload.tools ? { tools: retryPayload.tools } : {}),

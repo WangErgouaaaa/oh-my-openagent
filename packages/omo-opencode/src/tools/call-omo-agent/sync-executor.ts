@@ -187,6 +187,14 @@ export async function executeSync(
           },
         }
       : undefined
+    const promptModel = structuredReviewProtocol && model?.providerID === "deepseek"
+      ? {
+          ...model,
+          variant: undefined,
+          reasoningEffort: undefined,
+          thinking: { type: "disabled" as const },
+        }
+      : model
     const session = await deps.createOrGetSession(args, toolContext, ctx, model)
     sessionID = session.sessionID
     createdSessionForExecution = session.isNew
@@ -202,7 +210,7 @@ export async function executeSync(
       appliedFallbackChain = true
     }
 
-    applySessionPromptParams(sessionID, model)
+    applySessionPromptParams(sessionID, promptModel)
 
     await Promise.resolve(
       toolContext.metadata?.({
@@ -253,9 +261,9 @@ export async function executeSync(
             ...(structuredReviewSystem ? { system: structuredReviewSystem } : {}),
             tools: promptTools,
             parts: [{ type: "text", text: args.prompt }],
-            ...(model ? { model: { providerID: model.providerID, modelID: model.modelID } } : {}),
-            ...(model?.variant ? { variant: model.variant } : {}),
-            ...buildPromptGenerationParams(model),
+            ...(promptModel ? { model: { providerID: promptModel.providerID, modelID: promptModel.modelID } } : {}),
+            ...(promptModel?.variant ? { variant: promptModel.variant } : {}),
+            ...buildPromptGenerationParams(promptModel),
           },
         },
       })

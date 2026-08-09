@@ -585,7 +585,7 @@ describe("runtime-fallback", () => {
       expect(getDelegatedChildSessionBootstrap(sessionID)).toBeUndefined()
     })
 
-    test("should use persisted user prompt while preserving delegated bootstrap launch context", async () => {
+    test("should use persisted user prompt while preferring the clean delegated bootstrap format", async () => {
       const promptCalls: Array<Record<string, unknown>> = []
       const sessionID = "test-delegated-history-prefers-persisted-user"
       const hook = createRuntimeFallbackHook(
@@ -596,7 +596,11 @@ describe("runtime-fallback", () => {
                 {
                   info: {
                     role: "user",
-                    format: { type: "json_schema", schema: { type: "object" } },
+                    format: {
+                      type: "json_schema",
+                      schema: { type: "object" },
+                      retryCount: 2,
+                    },
                   },
                   parts: [{ type: "text", text: "persisted child task prompt" }],
                 },
@@ -620,6 +624,7 @@ describe("runtime-fallback", () => {
       registerDelegatedChildSessionBootstrap({
         sessionID,
         promptText: "bootstrap copy should not be reused",
+        format: { type: "json_schema", schema: { type: "object" } },
         system: "persisted delegated child system prompt",
         tools: { call_omo_agent: true, question: false, task: false },
       })
@@ -648,6 +653,63 @@ describe("runtime-fallback", () => {
       expect(promptBody?.tools?.question).toBe(false)
       expect(promptBody?.tools?.call_omo_agent).toBe(true)
       expect(getDelegatedChildSessionBootstrap(sessionID)).toBeUndefined()
+    })
+
+    test("should disable DeepSeek thinking when retrying a structured delegated child", async () => {
+      const promptCalls: Array<Record<string, unknown>> = []
+      const hook = createRuntimeFallbackHook(
+        createMockPluginInput({
+          session: {
+            messages: async () => ({ data: [] }),
+            promptAsync: async (args) => {
+              promptCalls.push(args as Record<string, unknown>)
+              return {}
+            },
+          },
+        }),
+        {
+          config: createMockConfig({ notify_on_fallback: false }),
+          pluginConfig: createMockPluginConfigWithCategoryModel(
+            "quick",
+            "anthropic/claude-haiku-4-5",
+            ["deepseek/deepseek-v4-flash(max)"],
+          ),
+        },
+      )
+      const sessionID = "test-delegated-structured-deepseek-fallback"
+      registerDelegatedChildSessionBootstrap({
+        sessionID,
+        promptText: "inspect the strict reviewer transport",
+        category: "quick",
+        format: { type: "json_schema", schema: { type: "object" } },
+      })
+
+      await hook.event({
+        event: {
+          type: "session.error",
+          properties: {
+            sessionID,
+            error: { statusCode: 429, message: "Rate limit before history persisted" },
+          },
+        },
+      })
+
+      expect(promptCalls).toHaveLength(1)
+      const promptBody = promptCalls[0]?.body as {
+        model?: { providerID?: string; modelID?: string }
+        variant?: string
+        reasoningEffort?: string
+        options?: Record<string, unknown>
+      } | undefined
+      expect(promptBody?.model).toEqual({
+        providerID: "deepseek",
+        modelID: "deepseek-v4-flash",
+      })
+      expect(promptBody?.variant).toBeUndefined()
+      expect(promptBody?.reasoningEffort).toBeUndefined()
+      expect(promptBody?.options).toEqual({
+        thinking: { type: "disabled" },
+      })
     })
 
     test("should trigger fallback on Copilot auto-retry signal in message.updated", async () => {

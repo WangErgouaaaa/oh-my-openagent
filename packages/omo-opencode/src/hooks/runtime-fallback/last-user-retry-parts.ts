@@ -32,7 +32,7 @@ export function getLastUserRetryPayload(
     lastUserMessage?.parts
     ?? (lastUserMessage?.info?.parts as Array<{ type?: string; text?: string }> | undefined)
   const persistedFormat = lastUserMessage?.info?.format
-  const format = isRecord(persistedFormat) ? persistedFormat : bootstrap?.format
+  const format = bootstrap?.format ?? (isRecord(persistedFormat) ? persistedFormat : undefined)
 
   const retryParts = (lastUserParts ?? [])
     .filter(

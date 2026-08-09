@@ -172,6 +172,51 @@ describe("executeSync", () => {
     expect(promptInput?.body.system).toContain("Do not emit XML")
   })
 
+  test("#given DeepSeek thinking mode #when dispatching a structured reviewer #then it keeps the model but disables incompatible thinking", async () => {
+    //#given
+    const executeSync = await importExecuteSync()
+    const deps = createDependencies()
+    const toolContext = createToolContext()
+    const recorder = createPromptAsyncRecorder(async (input) => ({
+      data: { info: { parentID: input.body.messageID } },
+    }))
+    const model = {
+      providerID: "deepseek",
+      modelID: "deepseek-v4-flash",
+      variant: "max",
+      reasoningEffort: "xhigh",
+      thinking: { type: "enabled" as const },
+    }
+
+    //#when
+    await executeSync(
+      {
+        subagent_type: "explore",
+        description: "structured review",
+        prompt: "Return the full reviewer verdict.",
+        response_mode: "thinker_v21",
+        run_in_background: false,
+      },
+      toolContext,
+      createContext(recorder.promptAsync) as never,
+      deps,
+      undefined,
+      undefined,
+      model,
+    )
+
+    //#then
+    const promptInput = recorder.getCapturedInput()
+    expect(promptInput?.body.model).toEqual({
+      providerID: "deepseek",
+      modelID: "deepseek-v4-flash",
+    })
+    expect(promptInput?.body.variant).toBeUndefined()
+    expect(promptInput?.body.options).toEqual({
+      thinking: { type: "disabled" },
+    })
+  })
+
   test("removes invisible agent characters before sending the sync prompt", async () => {
     //#given
     const executeSync = await importExecuteSync()
