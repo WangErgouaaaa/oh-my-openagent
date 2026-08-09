@@ -29,10 +29,14 @@ function createToolContext(): ExecuteSyncToolContext {
   }
 }
 
-function createContext(promptAsync: ReturnType<typeof mock>) {
+function createContext(
+  promptAsync: ReturnType<typeof mock>,
+  abort = mock(async () => ({ data: true })),
+) {
   return {
     client: {
       session: {
+        abort,
         prompt: promptAsync,
         promptAsync,
       },
@@ -93,6 +97,21 @@ describe("executeSync session cleanup", () => {
       expect(syncSubagentSessions.has(sessionID)).toBe(false)
     })
 
+    test("#when prompt dispatch fails #then the child session is not aborted", async () => {
+      const abort = mock(async () => ({ data: true }))
+      const result = await executeSync(
+        createArgs(),
+        createToolContext(),
+        createContext(mock(async () => {
+          throw new Error("prompt rejected")
+        }), abort) as never,
+        createDependencies(),
+      )
+
+      expect(result).toContain("Error: Failed to send prompt: prompt rejected")
+      expect(abort).not.toHaveBeenCalled()
+    })
+
     test("#when execution throws an error #then sessionID is still removed from both Sets", async () => {
       // given
       const sessionID = "ses-cleanup-error"
@@ -133,6 +152,49 @@ describe("executeSync session cleanup", () => {
       expect(subagentSessions.has(sessionID)).toBe(false)
       expect(syncSubagentSessions.has(sessionID)).toBe(false)
     })
+
+    test("#when a structured review times out #then the exact child session is aborted", async () => {
+      const sessionID = "ses-structured-timeout"
+      const abort = mock(async () => ({ data: true }))
+      const deps = createDependencies({
+        createOrGetSession: mock(async () => ({ sessionID, isNew: true })),
+        waitForCompletion: mock(async () => {
+          throw new Error("Agent task timed out after 10 minutes.")
+        }),
+      })
+
+      const result = await executeSync(
+        { ...createArgs(), response_mode: "thinker_v21" },
+        createToolContext(),
+        createContext(mock(async (input: { body: { messageID: string } }) => ({
+          data: { info: { parentID: input.body.messageID } },
+        })), abort) as never,
+        deps,
+      )
+
+      expect(result).toContain("Agent task timed out after 10 minutes.")
+      expect(abort).toHaveBeenCalledTimes(1)
+      expect(abort).toHaveBeenCalledWith({ path: { id: sessionID } })
+    })
+
+    test("#when structured response processing fails #then the completed child session is not aborted", async () => {
+      const abort = mock(async () => ({ data: true }))
+      const result = await executeSync(
+        { ...createArgs(), response_mode: "thinker_v21" },
+        createToolContext(),
+        createContext(mock(async (input: { body: { messageID: string } }) => ({
+          data: { info: { parentID: input.body.messageID } },
+        })), abort) as never,
+        createDependencies({
+          processMessages: mock(async () => {
+            throw new Error("invalid structured response")
+          }),
+        }),
+      )
+
+      expect(result).toContain("Error: invalid structured response")
+      expect(abort).not.toHaveBeenCalled()
+    })
   })
 
   describe("#given executeSync reuses an existing session", () => {
@@ -161,6 +223,28 @@ describe("executeSync session cleanup", () => {
       expect(result).toContain(`session_id: ${sessionID}`)
       expect(subagentSessions.has(sessionID)).toBe(true)
       expect(syncSubagentSessions.has(sessionID)).toBe(true)
+    })
+
+    test("#when completion polling fails #then the exact reused session is aborted", async () => {
+      const sessionID = "ses-reused-timeout"
+      const abort = mock(async () => ({ data: true }))
+      const result = await executeSync(
+        { ...createArgs(), session_id: sessionID, response_mode: "thinker_v21" },
+        createToolContext(),
+        createContext(mock(async (input: { body: { messageID: string } }) => ({
+          data: { info: { parentID: input.body.messageID } },
+        })), abort) as never,
+        createDependencies({
+          createOrGetSession: mock(async () => ({ sessionID, isNew: false })),
+          waitForCompletion: mock(async () => {
+            throw new Error("reused session poll failed")
+          }),
+        }),
+      )
+
+      expect(result).toContain("Error: reused session poll failed")
+      expect(abort).toHaveBeenCalledTimes(1)
+      expect(abort).toHaveBeenCalledWith({ path: { id: sessionID } })
     })
 
     test("#when execution applies a fallback chain #then it clears that chain in finally", async () => {

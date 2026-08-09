@@ -1,4 +1,5 @@
 import type { PluginInput } from "@opencode-ai/plugin"
+import { abortWithTimeout } from "../../features/background-agent/abort-with-timeout"
 import { clearSessionAgent, handedBackSyncSessions, setSessionAgent, subagentSessions, syncSubagentSessions } from "../../features/claude-code-session-state"
 import { generateMessageId } from "../../features/hook-message-injector/id-generation"
 import { dispatchInternalPrompt, isInternalPromptDispatchAccepted } from "../../hooks/shared/prompt-async-gate"
@@ -160,6 +161,7 @@ export async function executeSync(
   let appliedFallbackChain = false
   let baselineMessageKeys: ReadonlySet<string> = new Set()
   let promptMessageID: string | undefined
+  let abortSessionOnExit = false
 
   try {
     const structuredReviewProtocol = resolveStructuredReviewProtocol(args)
@@ -303,17 +305,22 @@ export async function executeSync(
     }
 
     try {
-      if (structuredReviewProtocol) {
-        await deps.waitForCompletion(sessionID, toolContext, ctx, {
-          maxPollTimeMs: 10 * 60 * 1000,
-          baselineMessageKeys,
-          expectedPromptMessageID: promptMessageID,
-        })
-      } else {
-        await deps.waitForCompletion(sessionID, toolContext, ctx, {
-          baselineMessageKeys,
-          expectedPromptMessageID: promptMessageID,
-        })
+      try {
+        if (structuredReviewProtocol) {
+          await deps.waitForCompletion(sessionID, toolContext, ctx, {
+            maxPollTimeMs: 10 * 60 * 1000,
+            baselineMessageKeys,
+            expectedPromptMessageID: promptMessageID,
+          })
+        } else {
+          await deps.waitForCompletion(sessionID, toolContext, ctx, {
+            baselineMessageKeys,
+            expectedPromptMessageID: promptMessageID,
+          })
+        }
+      } catch (error) {
+        abortSessionOnExit = true
+        throw error
       }
 
       const responseText = await deps.processMessages(sessionID, ctx, {
@@ -341,6 +348,9 @@ export async function executeSync(
 
     if (sessionID) {
       clearDelegatedChildSessionBootstrap(sessionID)
+      if (abortSessionOnExit && typeof ctx.client.session.abort === "function") {
+        await abortWithTimeout(ctx.client, sessionID)
+      }
     }
 
     if (sessionID && createdSessionForExecution) {
