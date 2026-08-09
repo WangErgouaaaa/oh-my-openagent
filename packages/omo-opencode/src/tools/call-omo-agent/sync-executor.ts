@@ -162,6 +162,7 @@ export async function executeSync(
   let baselineMessageKeys: ReadonlySet<string> = new Set()
   let promptMessageID: string | undefined
   let abortSessionOnExit = false
+  let completionPollingError: unknown
 
   try {
     const structuredReviewProtocol = resolveStructuredReviewProtocol(args)
@@ -320,6 +321,7 @@ export async function executeSync(
         }
       } catch (error) {
         abortSessionOnExit = true
+        completionPollingError = error
         throw error
       }
 
@@ -342,14 +344,24 @@ export async function executeSync(
     spawnReservation?.rollback()
     throw error
   } finally {
+    let abortCleanupError: Error | undefined
     if (sessionID && appliedFallbackChain) {
       deps.clearSessionFallbackChain(sessionID)
     }
 
     if (sessionID) {
       clearDelegatedChildSessionBootstrap(sessionID)
-      if (abortSessionOnExit && typeof ctx.client.session.abort === "function") {
-        await abortWithTimeout(ctx.client, sessionID)
+      if (abortSessionOnExit) {
+        const aborted = typeof ctx.client.session.abort === "function"
+          && await abortWithTimeout(ctx.client, sessionID)
+        if (!aborted) {
+          const pollingMessage = completionPollingError instanceof Error
+            ? completionPollingError.message
+            : String(completionPollingError)
+          abortCleanupError = new Error(
+            `Failed to abort child session ${sessionID} after completion polling failed: ${pollingMessage}`,
+          )
+        }
       }
     }
 
@@ -360,5 +372,6 @@ export async function executeSync(
       clearSessionAgent(sessionID)
       handedBackSyncSessions.add(sessionID)
     }
+    if (abortCleanupError) throw abortCleanupError
   }
 }

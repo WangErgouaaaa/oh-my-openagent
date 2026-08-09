@@ -13,6 +13,12 @@ type CompletionMessage = CursorMessage & {
   info?: NonNullable<CursorMessage["info"]> & { role?: string; parentID?: string }
 }
 
+function throwIfAborted(abort: AbortSignal): void {
+  if (!abort.aborted) return
+  log(`[call_omo_agent] Aborted by user`)
+  throw new Error("Task aborted.")
+}
+
 export async function captureMessageBaseline(
   sessionID: string,
   ctx: PluginInput,
@@ -49,14 +55,13 @@ export async function waitForCompletion(
   let sawActiveStatus = false
 
   while (Date.now() - pollStart < MAX_POLL_TIME_MS) {
-    if (toolContext.abort?.aborted) {
-      log(`[call_omo_agent] Aborted by user`)
-      throw new Error("Task aborted.")
-    }
+    throwIfAborted(toolContext.abort)
 
     await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_MS))
+    throwIfAborted(toolContext.abort)
 
     const statusResult = await ctx.client.session.status()
+    throwIfAborted(toolContext.abort)
     const allStatuses = normalizeSDKResponse(statusResult, {} as Record<string, { type: string }>)
     const sessionStatus = allStatuses[sessionID]
 
@@ -68,6 +73,7 @@ export async function waitForCompletion(
     }
 
     const messagesCheck = await ctx.client.session.messages({ path: { id: sessionID } })
+    throwIfAborted(toolContext.abort)
     if (messagesCheck.error) {
       throw new Error(`Failed to get messages: ${messagesCheck.error}`)
     }

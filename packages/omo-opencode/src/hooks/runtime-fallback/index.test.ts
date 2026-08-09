@@ -582,7 +582,7 @@ describe("runtime-fallback", () => {
       expect(promptBody?.tools?.question).toBe(false)
       expect(promptBody?.tools?.call_omo_agent).toBe(true)
       expect(promptBody?.parts?.[0]?.text).toContain("inspect src/tools/delegate-task")
-      expect(getDelegatedChildSessionBootstrap(sessionID)).toBeUndefined()
+      expect(getDelegatedChildSessionBootstrap(sessionID)).toBeDefined()
     })
 
     test("should use persisted user prompt while preferring the clean delegated bootstrap format", async () => {
@@ -652,7 +652,7 @@ describe("runtime-fallback", () => {
       expect(promptBody?.system).toBe("persisted delegated child system prompt")
       expect(promptBody?.tools?.question).toBe(false)
       expect(promptBody?.tools?.call_omo_agent).toBe(true)
-      expect(getDelegatedChildSessionBootstrap(sessionID)).toBeUndefined()
+      expect(getDelegatedChildSessionBootstrap(sessionID)).toBeDefined()
     })
 
     test("should disable DeepSeek thinking when retrying a structured delegated child", async () => {

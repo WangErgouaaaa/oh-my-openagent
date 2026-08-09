@@ -4,6 +4,7 @@ import {
   subagentSessions,
   syncSubagentSessions,
 } from "../../features/claude-code-session-state"
+import { waitForCompletion } from "./completion-poller"
 import { executeSync } from "./sync-executor"
 
 type ExecuteSyncArgs = Parameters<typeof executeSync>[0]
@@ -173,6 +174,96 @@ describe("executeSync session cleanup", () => {
       )
 
       expect(result).toContain("Agent task timed out after 10 minutes.")
+      expect(abort).toHaveBeenCalledTimes(1)
+      expect(abort).toHaveBeenCalledWith({ path: { id: sessionID } })
+    })
+
+    test.each([
+      ["returns an SDK error", async () => ({ error: "abort denied" }), false],
+      ["rejects", async () => { throw new Error("abort transport failed") }, false],
+      ["times out", async () => new Promise<never>(() => {}), true],
+    ])("#when completion polling fails and child abort %s #then both failures are surfaced", async (
+      _case,
+      abortImplementation,
+      forceAbortTimeout,
+    ) => {
+      const sessionID = "ses-abort-cleanup-failure"
+      const abort = mock(abortImplementation)
+      const originalSetTimeout = globalThis.setTimeout
+      if (forceAbortTimeout) {
+        globalThis.setTimeout = ((handler: TimerHandler) => {
+          if (typeof handler === "function") handler()
+          return originalSetTimeout(() => {}, 0)
+        }) as typeof globalThis.setTimeout
+      }
+
+      try {
+        const execution = executeSync(
+          { ...createArgs(), response_mode: "thinker_v21" },
+          createToolContext(),
+          createContext(mock(async (input: { body: { messageID: string } }) => ({
+            data: { info: { parentID: input.body.messageID } },
+          })), abort) as never,
+          createDependencies({
+            createOrGetSession: mock(async () => ({ sessionID, isNew: true })),
+            waitForCompletion: mock(async () => {
+              throw new Error("polling failed")
+            }),
+          }),
+        )
+
+        await expect(execution).rejects.toThrow(
+          `Failed to abort child session ${sessionID} after completion polling failed: polling failed`,
+        )
+      } finally {
+        globalThis.setTimeout = originalSetTimeout
+      }
+      expect(abort).toHaveBeenCalledWith({ path: { id: sessionID } })
+    })
+
+    test("#when cancellation arrives during the final message read #then the exact child session is aborted", async () => {
+      const sessionID = "ses-cancel-during-final-read"
+      const abortController = new AbortController()
+      const abort = mock(async () => ({ data: true }))
+      let promptMessageID = ""
+      const promptAsync = mock(async (input: { body: { messageID: string } }) => {
+        promptMessageID = input.body.messageID
+        return { data: { info: { parentID: promptMessageID } } }
+      })
+      let messageReads = 0
+      const context = {
+        client: {
+          session: {
+            abort,
+            prompt: promptAsync,
+            promptAsync,
+            status: mock(async () => ({ data: { [sessionID]: { type: "idle" } } })),
+            messages: mock(async () => {
+              if (!promptMessageID) return { data: [] }
+              messageReads += 1
+              if (messageReads === 4) abortController.abort()
+              return {
+                data: [
+                  { info: { id: promptMessageID, role: "user" } },
+                  { info: { id: "answer", role: "assistant", parentID: promptMessageID } },
+                ],
+              }
+            }),
+          },
+        },
+      }
+
+      const result = await executeSync(
+        { ...createArgs(), response_mode: "thinker_v21" },
+        { ...createToolContext(), abort: abortController.signal },
+        context as never,
+        createDependencies({
+          createOrGetSession: mock(async () => ({ sessionID, isNew: true })),
+          waitForCompletion,
+        }),
+      )
+
+      expect(result).toContain("Task aborted.")
       expect(abort).toHaveBeenCalledTimes(1)
       expect(abort).toHaveBeenCalledWith({ path: { id: sessionID } })
     })

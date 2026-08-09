@@ -147,34 +147,49 @@ export async function processMessages(
   }
 
   if (options.expectedArtifactKind) {
+    const expectedArtifactKind = options.expectedArtifactKind
     if (!options.expectedPromptMessageID) {
       throw new Error("Structured reviewer response requires a dispatched prompt message ID.")
     }
 
-    const finalAssistant = [...newMessages]
-      .reverse()
-      .find((message: SDKMessage) =>
+    const linkedAssistants = newMessages
+      .filter((message: SDKMessage) =>
         message.info?.role === "assistant"
         && message.info.parentID === options.expectedPromptMessageID
-        && (
-          message.info.structured !== undefined
-          || (message.parts ?? []).some((part) => part.type === "text" && Boolean(part.text))
-        )
       )
+    const nativeResponses = linkedAssistants
+      .filter((message) => message.info?.structured !== undefined)
+      .map((message) => JSON.stringify(message.info?.structured))
+    const textResponses = linkedAssistants
+      .map((message) => (message.parts ?? [])
+          .filter((part) => part.type === "text" && Boolean(part.text))
+          .map((part) => (part as { text: string }).text)
+          .join(""))
+      .filter(Boolean)
 
-    if (!finalAssistant) {
+    if (nativeResponses.length === 0 && textResponses.length === 0) {
       throw new Error("No final assistant response linked to the dispatched prompt found")
     }
 
-    const responseText = finalAssistant.info?.structured !== undefined
-      ? JSON.stringify(finalAssistant.info.structured)
-      : (finalAssistant.parts ?? [])
-        .filter((part) => part.type === "text" && Boolean(part.text))
-        .map((part) => (part as { text: string }).text)
-        .join("")
+    const structuredTextResponses = textResponses.filter((responseText) =>
+      responseText.length > MAX_STRUCTURED_REVIEW_RESPONSE_CHARS
+      || /```json\b/i.test(responseText)
+      || containsJsonMapping(responseText)
+    )
+    const normalizedTextResponses = structuredTextResponses.map((responseText) =>
+      normalizeStructuredReviewResponse(responseText, expectedArtifactKind)
+    )
+    if (
+      nativeResponses.length > 1
+      || normalizedTextResponses.length > 1
+      || (nativeResponses.length === 1 && normalizedTextResponses.length === 1)
+    ) {
+      throw new Error("Structured reviewer response must contain exactly one final assistant response.")
+    }
 
+    const responseText = nativeResponses[0] ?? normalizedTextResponses[0] ?? textResponses.at(-1)!
     log(`[call_omo_agent] Got final assistant response, length: ${responseText.length}`)
-    return normalizeStructuredReviewResponse(responseText, options.expectedArtifactKind)
+    return normalizeStructuredReviewResponse(responseText, expectedArtifactKind)
   }
 
   // Extract content from ALL messages, not just the last one

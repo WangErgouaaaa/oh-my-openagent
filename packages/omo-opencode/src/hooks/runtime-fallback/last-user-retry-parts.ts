@@ -1,8 +1,5 @@
 import { isRecord } from "@oh-my-opencode/utils"
-import {
-  clearDelegatedChildSessionBootstrap,
-  getDelegatedChildSessionBootstrap,
-} from "../../shared/delegated-child-session-bootstrap"
+import { getDelegatedChildSessionBootstrap } from "../../shared/delegated-child-session-bootstrap"
 import { extractSessionMessages } from "./session-messages"
 
 type RetryPart = { type: "text"; text: string }
@@ -44,9 +41,6 @@ export function getLastUserRetryPayload(
     .map((part) => ({ type: "text" as const, text: part.text }))
 
   if (retryParts.length > 0) {
-    if (sessionID) {
-      clearDelegatedChildSessionBootstrap(sessionID)
-    }
     return {
       retryParts,
       ...(format ? { format } : {}),
@@ -60,9 +54,6 @@ export function getLastUserRetryPayload(
   }
 
   const bootstrapRetryParts = bootstrap?.retryParts ?? []
-  if (bootstrapRetryParts.length > 0) {
-    clearDelegatedChildSessionBootstrap(sessionID)
-  }
 
   return {
     retryParts: bootstrapRetryParts,
