@@ -163,6 +163,30 @@ export async function executeSync(
 
   try {
     const structuredReviewProtocol = resolveStructuredReviewProtocol(args)
+    const structuredReviewSystem = structuredReviewProtocol
+      ? [
+          "The caller selected a strict structured reviewer response mode.",
+          "This contract overrides the agent's default final response format.",
+          "Complete the requested review, then use StructuredOutput exactly once for the final response.",
+          "The StructuredOutput schema enforces transport only; include every field required by the caller prompt.",
+          "Do not emit XML, Markdown, code fences, analysis, or a plain-text final response.",
+        ].join("\n")
+      : undefined
+    const structuredReviewFormat = structuredReviewProtocol
+      ? {
+          type: "json_schema",
+          schema: {
+            type: "object",
+            properties: {
+              artifact_kind: {
+                type: "string",
+                enum: [structuredReviewProtocol.expectedArtifactKind],
+              },
+            },
+            required: ["artifact_kind"],
+          },
+        }
+      : undefined
     const session = await deps.createOrGetSession(args, toolContext, ctx, model)
     sessionID = session.sessionID
     createdSessionForExecution = session.isNew
@@ -201,6 +225,8 @@ export async function executeSync(
       sessionID,
       promptText: args.prompt,
       fallbackChain,
+      format: structuredReviewFormat,
+      system: structuredReviewSystem,
       tools: promptTools,
     })
 
@@ -223,6 +249,8 @@ export async function executeSync(
           body: {
             messageID: promptMessageID,
             agent: promptAgent,
+            ...(structuredReviewFormat ? { format: structuredReviewFormat } : {}),
+            ...(structuredReviewSystem ? { system: structuredReviewSystem } : {}),
             tools: promptTools,
             parts: [{ type: "text", text: args.prompt }],
             ...(model ? { model: { providerID: model.providerID, modelID: model.modelID } } : {}),

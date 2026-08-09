@@ -108,6 +108,7 @@ export function createAutoRetryDispatcher(
         body: {
           ...(launchAgent ? { agent: launchAgent } : {}),
           ...retryModelPayload,
+          ...(retryPayload.format ? { format: retryPayload.format } : {}),
           ...(retryPayload.system ? { system: retryPayload.system } : {}),
           ...(retryPayload.tools ? { tools: retryPayload.tools } : {}),
           ...(retryMessageID ? { messageID: retryMessageID } : {}),

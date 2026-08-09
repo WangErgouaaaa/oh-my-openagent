@@ -3,7 +3,13 @@ import { log } from "../../shared"
 import { buildMessageKey, consumeNewMessages } from "../../shared/session-cursor"
 
 interface SDKMessage {
-  info?: { id?: string; role?: string; parentID?: string; time?: { created?: number } }
+  info?: {
+    id?: string
+    role?: string
+    parentID?: string
+    structured?: unknown
+    time?: { created?: number }
+  }
   parts?: Array<{ type: string; text?: string; content?: string | Array<{ type: string; text?: string }> }>
 }
 
@@ -150,17 +156,22 @@ export async function processMessages(
       .find((message: SDKMessage) =>
         message.info?.role === "assistant"
         && message.info.parentID === options.expectedPromptMessageID
-        && (message.parts ?? []).some((part) => part.type === "text" && Boolean(part.text))
+        && (
+          message.info.structured !== undefined
+          || (message.parts ?? []).some((part) => part.type === "text" && Boolean(part.text))
+        )
       )
 
     if (!finalAssistant) {
       throw new Error("No final assistant response linked to the dispatched prompt found")
     }
 
-    const responseText = (finalAssistant.parts ?? [])
-      .filter((part) => part.type === "text" && Boolean(part.text))
-      .map((part) => (part as { text: string }).text)
-      .join("")
+    const responseText = finalAssistant.info?.structured !== undefined
+      ? JSON.stringify(finalAssistant.info.structured)
+      : (finalAssistant.parts ?? [])
+        .filter((part) => part.type === "text" && Boolean(part.text))
+        .map((part) => (part as { text: string }).text)
+        .join("")
 
     log(`[call_omo_agent] Got final assistant response, length: ${responseText.length}`)
     return normalizeStructuredReviewResponse(responseText, options.expectedArtifactKind)

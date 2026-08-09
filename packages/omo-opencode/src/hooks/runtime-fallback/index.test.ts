@@ -551,6 +551,7 @@ describe("runtime-fallback", () => {
         sessionID,
         promptText: "inspect src/tools/delegate-task and report the issue",
         category: "quick",
+        format: { type: "json_schema", schema: { type: "object" } },
         system: "delegated child system prompt",
         tools: { call_omo_agent: true, question: false, task: false },
       })
@@ -569,12 +570,14 @@ describe("runtime-fallback", () => {
       const promptBody = promptCalls[0]?.body as {
         model?: { providerID?: string; modelID?: string }
         parts?: Array<{ type?: string; text?: string }>
+        format?: Record<string, unknown>
         system?: string
         tools?: Record<string, boolean>
         variant?: string
       } | undefined
       expect(promptBody?.model).toEqual({ providerID: "openai", modelID: "gpt-5.4" })
       expect(promptBody?.variant).toBe("high")
+      expect(promptBody?.format).toEqual({ type: "json_schema", schema: { type: "object" } })
       expect(promptBody?.system).toBe("delegated child system prompt")
       expect(promptBody?.tools?.question).toBe(false)
       expect(promptBody?.tools?.call_omo_agent).toBe(true)
@@ -591,7 +594,10 @@ describe("runtime-fallback", () => {
             messages: async () => ({
               data: [
                 {
-                  info: { role: "user" },
+                  info: {
+                    role: "user",
+                    format: { type: "json_schema", schema: { type: "object" } },
+                  },
                   parts: [{ type: "text", text: "persisted child task prompt" }],
                 },
               ],
@@ -632,10 +638,12 @@ describe("runtime-fallback", () => {
       expect(promptCalls).toHaveLength(1)
       const promptBody = promptCalls[0]?.body as {
         parts?: Array<{ type?: string; text?: string }>
+        format?: Record<string, unknown>
         system?: string
         tools?: Record<string, boolean>
       } | undefined
       expect(promptBody?.parts?.[0]?.text).toBe("persisted child task prompt")
+      expect(promptBody?.format).toEqual({ type: "json_schema", schema: { type: "object" } })
       expect(promptBody?.system).toBe("persisted delegated child system prompt")
       expect(promptBody?.tools?.question).toBe(false)
       expect(promptBody?.tools?.call_omo_agent).toBe(true)

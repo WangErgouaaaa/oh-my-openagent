@@ -46,6 +46,43 @@ describe("processMessages", () => {
     expect(result).toBe(finalJson)
   })
 
+  test("structured output reads the native StructuredOutput result without a text wrapper", async () => {
+    const sessionID = "structured-native-result-test"
+    resetMessageCursor(sessionID)
+    const structured = {
+      artifact_kind: "thinker_raw_verdict_v21",
+      role: "explore",
+      status: "completed",
+    }
+    const messages = [
+      {
+        info: {
+          id: "assistant-final",
+          role: "assistant",
+          parentID: "current-user",
+          time: { created: 1 },
+          structured,
+        },
+        parts: [{
+          type: "tool",
+          tool: "StructuredOutput",
+          state: { status: "completed" },
+        }],
+      },
+    ]
+
+    const result = await processMessages(
+      sessionID,
+      createContext(messages) as never,
+      {
+        expectedPromptMessageID: "current-user",
+        expectedArtifactKind: "thinker_raw_verdict_v21",
+      },
+    )
+
+    expect(result).toBe(JSON.stringify(structured))
+  })
+
   test("structured output extracts one JSON mapping from a native agent wrapper", async () => {
     const sessionID = "structured-native-wrapper-test"
     resetMessageCursor(sessionID)
