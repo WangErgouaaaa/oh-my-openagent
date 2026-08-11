@@ -17,6 +17,7 @@ export interface ProcessMessagesOptions {
   baselineMessageKeys?: ReadonlySet<string>
   expectedPromptMessageID?: string
   expectedArtifactKind?: "thinker_raw_verdict" | "thinker_raw_verdict_v21"
+  promptResponse?: unknown
 }
 
 const MAX_STRUCTURED_REVIEW_RESPONSE_CHARS = 32 * 1024
@@ -95,16 +96,33 @@ export async function processMessages(
   ctx: PluginInput,
   options: ProcessMessagesOptions = {},
 ): Promise<string> {
-  const messagesResult = await ctx.client.session.messages({
-    path: { id: sessionID },
-  })
-
-  if (messagesResult.error) {
-    log(`[call_omo_agent] Messages error:`, messagesResult.error)
-    throw new Error(`Failed to get messages: ${messagesResult.error}`)
+  let messages: SDKMessage[]
+  if (options.promptResponse !== undefined) {
+    const payload = typeof options.promptResponse === "object"
+      && options.promptResponse !== null
+      && "data" in options.promptResponse
+      ? options.promptResponse.data
+      : options.promptResponse
+    if (
+      typeof payload !== "object"
+      || payload === null
+      || !("info" in payload)
+      || !("parts" in payload)
+      || !Array.isArray(payload.parts)
+    ) {
+      throw new Error("Structured prompt response is invalid.")
+    }
+    messages = [payload as SDKMessage]
+  } else {
+    const messagesResult = await ctx.client.session.messages({
+      path: { id: sessionID },
+    })
+    if (messagesResult.error) {
+      log(`[call_omo_agent] Messages error:`, messagesResult.error)
+      throw new Error(`Failed to get messages: ${messagesResult.error}`)
+    }
+    messages = messagesResult.data
   }
-
-  const messages = messagesResult.data
   log(`[call_omo_agent] Got ${messages.length} messages`)
 
   // Include both assistant messages AND tool messages

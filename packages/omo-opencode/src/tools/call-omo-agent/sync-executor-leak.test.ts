@@ -178,6 +178,41 @@ describe("executeSync session cleanup", () => {
       expect(abort).toHaveBeenCalledWith({ path: { id: sessionID } })
     })
 
+    test("#when cancellation arrives with a bound structured response #then the exact child session is aborted", async () => {
+      const sessionID = "ses-cancel-bound-response"
+      const abortController = new AbortController()
+      const abort = mock(async () => ({ data: true }))
+      const processMessages = mock(async () => "must not run")
+
+      const result = await executeSync(
+        { ...createArgs(), response_mode: "thinker_v21" },
+        { ...createToolContext(), abort: abortController.signal },
+        createContext(mock(async (input: { body: { messageID: string } }) => {
+          abortController.abort()
+          return {
+            data: {
+              info: {
+                id: "assistant-final",
+                role: "assistant",
+                parentID: input.body.messageID,
+                structured: { artifact_kind: "thinker_raw_verdict_v21" },
+              },
+              parts: [],
+            },
+          }
+        }), abort) as never,
+        createDependencies({
+          createOrGetSession: mock(async () => ({ sessionID, isNew: true })),
+          processMessages,
+        }),
+      )
+
+      expect(result).toContain("Task aborted.")
+      expect(processMessages).not.toHaveBeenCalled()
+      expect(abort).toHaveBeenCalledTimes(1)
+      expect(abort).toHaveBeenCalledWith({ path: { id: sessionID } })
+    })
+
     test.each([
       ["returns an SDK error", async () => ({ error: "abort denied" }), false],
       ["rejects", async () => { throw new Error("abort transport failed") }, false],

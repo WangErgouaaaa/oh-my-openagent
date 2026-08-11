@@ -141,6 +141,23 @@ function getPromptResponseParentID(response: unknown): string | undefined {
   return typeof parentID === "string" && parentID.length > 0 ? parentID : undefined
 }
 
+function isCompletePromptResponse(response: unknown): boolean {
+  const payload = typeof response === "object" && response !== null && "data" in response
+    ? (response as { data?: unknown }).data
+    : response
+  if (
+    typeof payload !== "object"
+    || payload === null
+    || !("info" in payload)
+    || !("parts" in payload)
+    || !Array.isArray(payload.parts)
+  ) {
+    return false
+  }
+  const info = payload.info
+  return typeof info === "object" && info !== null && "role" in info && info.role === "assistant"
+}
+
 export async function executeSync(
   args: CallOmoAgentArgs,
   toolContext: {
@@ -161,6 +178,7 @@ export async function executeSync(
   let appliedFallbackChain = false
   let baselineMessageKeys: ReadonlySet<string> = new Set()
   let promptMessageID: string | undefined
+  let promptResponse: unknown
   let abortSessionOnExit = false
   let completionPollingError: unknown
 
@@ -292,6 +310,13 @@ export async function executeSync(
       ) {
         throw new Error("Structured reviewer prompt response was not linked to the dispatched user message.")
       }
+      if (
+        structuredReviewProtocol
+        && promptResult.status === "dispatched"
+        && isCompletePromptResponse(promptResult.response)
+      ) {
+        promptResponse = promptResult.response
+      }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error)
       log(`[call_omo_agent] Prompt error:`, errorMessage)
@@ -307,14 +332,10 @@ export async function executeSync(
 
     try {
       try {
-        if (structuredReviewProtocol) {
+        if (toolContext.abort.aborted) throw new Error("Task aborted.")
+        if (promptResponse === undefined) {
           await deps.waitForCompletion(sessionID, toolContext, ctx, {
-            maxPollTimeMs: 10 * 60 * 1000,
-            baselineMessageKeys,
-            expectedPromptMessageID: promptMessageID,
-          })
-        } else {
-          await deps.waitForCompletion(sessionID, toolContext, ctx, {
+            ...(structuredReviewProtocol ? { maxPollTimeMs: 10 * 60 * 1000 } : {}),
             baselineMessageKeys,
             expectedPromptMessageID: promptMessageID,
           })
@@ -329,6 +350,7 @@ export async function executeSync(
         baselineMessageKeys,
         expectedPromptMessageID: promptMessageID,
         expectedArtifactKind: structuredReviewProtocol?.expectedArtifactKind,
+        ...(promptResponse !== undefined ? { promptResponse } : {}),
       })
 
       return responseText + "\n\n" + taskMetadata(sessionID, args)
