@@ -172,6 +172,56 @@ describe("executeSync", () => {
     expect(promptInput?.body.system).toContain("Do not emit XML")
   })
 
+  test("uses the bound structured prompt response without reopening broken session history", async () => {
+    const executeSync = await importExecuteSync()
+    const structured = {
+      artifact_kind: "thinker_raw_verdict_v21",
+      role: "explore",
+    }
+    const promptResponse = {
+      data: {
+        info: {
+          id: "assistant-final",
+          role: "assistant",
+          parentID: "",
+          structured,
+        },
+        parts: [],
+      },
+    }
+    const deps = createDependencies({
+      waitForCompletion: mock(async () => {
+        throw new Error("OpenCode rejected its persisted OutputFormatJsonSchema")
+      }),
+      processMessages: mock(async (_sessionID, _ctx, options) => {
+        expect(options?.promptResponse).toBe(promptResponse)
+        return JSON.stringify(structured)
+      }),
+    })
+    const toolContext = createToolContext()
+    const recorder = createPromptAsyncRecorder(async (input) => {
+      promptResponse.data.info.parentID = input.body.messageID ?? ""
+      return promptResponse
+    })
+
+    const result = await executeSync(
+      {
+        subagent_type: "explore",
+        description: "structured review",
+        prompt: "Return the full reviewer verdict.",
+        response_mode: "thinker_v21",
+        run_in_background: false,
+      },
+      toolContext,
+      createContext(recorder.promptAsync) as never,
+      deps,
+    )
+
+    expect(result).toContain(JSON.stringify(structured))
+    expect(deps.waitForCompletion).not.toHaveBeenCalled()
+    expect(deps.processMessages).toHaveBeenCalledTimes(1)
+  })
+
   test("#given DeepSeek thinking mode #when dispatching a structured reviewer #then it keeps the model but disables incompatible thinking", async () => {
     //#given
     const executeSync = await importExecuteSync()

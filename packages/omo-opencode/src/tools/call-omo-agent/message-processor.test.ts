@@ -83,6 +83,45 @@ describe("processMessages", () => {
     expect(result).toBe(JSON.stringify(structured))
   })
 
+  test("structured output can use the bound prompt response without fetching session history", async () => {
+    const structured = {
+      artifact_kind: "thinker_raw_verdict_v21",
+      role: "explore",
+    }
+    const context = {
+      client: {
+        session: {
+          messages: async () => {
+            throw new Error("OpenCode rejected its persisted OutputFormatJsonSchema")
+          },
+        },
+      },
+    }
+
+    const result = await processMessages(
+      "structured-bound-prompt-response-test",
+      context as never,
+      {
+        expectedPromptMessageID: "current-user",
+        expectedArtifactKind: "thinker_raw_verdict_v21",
+        promptResponse: {
+          data: {
+            info: {
+              id: "assistant-final",
+              role: "assistant",
+              parentID: "current-user",
+              time: { created: 1 },
+              structured,
+            },
+            parts: [],
+          },
+        },
+      },
+    )
+
+    expect(result).toBe(JSON.stringify(structured))
+  })
+
   test("structured output rejects multiple native results linked to one prompt", async () => {
     const sessionID = "structured-duplicate-native-results-test"
     resetMessageCursor(sessionID)
