@@ -1,6 +1,7 @@
 import type { PluginInput } from "@opencode-ai/plugin"
 import { log } from "../../shared"
 import { buildMessageKey, consumeNewMessages } from "../../shared/session-cursor"
+import { assertThinkerV2Verdict } from "./thinker-v2-verdict-schema"
 
 interface SDKMessage {
   info?: {
@@ -87,6 +88,9 @@ function normalizeStructuredReviewResponse(
     || (parsed as { artifact_kind?: unknown }).artifact_kind !== expectedArtifactKind
   ) {
     throw new Error(`Structured reviewer response must declare artifact_kind ${expectedArtifactKind}.`)
+  }
+  if (expectedArtifactKind === "thinker_raw_verdict") {
+    assertThinkerV2Verdict(parsed)
   }
   return candidate
 }

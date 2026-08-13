@@ -3,6 +3,7 @@
 import { describe, expect, test } from "bun:test"
 import { processMessages } from "./message-processor"
 import { resetMessageCursor } from "../../shared/session-cursor"
+import { assertThinkerV2Verdict } from "./thinker-v2-verdict-schema"
 
 function createContext(messages: unknown[]) {
   return {
@@ -14,11 +15,32 @@ function createContext(messages: unknown[]) {
   }
 }
 
+function createThinkerV2Verdict() {
+  return {
+    schema_version: 1,
+    artifact_kind: "thinker_raw_verdict",
+    role: "momus",
+    role_verdict: "approve",
+    candidate_plan_sha256: "a".repeat(64),
+    context_manifest_sha256: "b".repeat(64),
+    claim_verdicts: [{
+      claim_id: "claim-001",
+      verdict: "supported",
+      confidence: 1,
+      evidence_refs: [],
+      reason: "Verified.",
+    }],
+    new_claim_candidates: [],
+    evidence_refs: [],
+    findings: [],
+  }
+}
+
 describe("processMessages", () => {
   test("structured output returns only the final assistant text", async () => {
     const sessionID = "structured-message-processor-test"
     resetMessageCursor(sessionID)
-    const finalJson = '{"artifact_kind":"thinker_raw_verdict","role_verdict":"approve"}'
+    const finalJson = JSON.stringify(createThinkerV2Verdict())
     const messages = [
       {
         info: { id: "assistant-progress", role: "assistant", parentID: "current-user", time: { created: 1 } },
@@ -493,6 +515,89 @@ describe("processMessages", () => {
         expectedArtifactKind: "thinker_raw_verdict",
       },
     )).rejects.toThrow("Structured reviewer response must declare artifact_kind thinker_raw_verdict")
+  })
+
+  test("thinker v2 structured output rejects a semantically empty verdict", async () => {
+    const sessionID = "structured-empty-thinker-v2-verdict-test"
+    resetMessageCursor(sessionID)
+    const messages = [
+      {
+        info: { id: "assistant-final", role: "assistant", parentID: "current-user", time: { created: 1 } },
+        parts: [{ type: "text", text: '{"artifact_kind":"thinker_raw_verdict"}' }],
+      },
+    ]
+
+    await expect(processMessages(
+      sessionID,
+      createContext(messages) as never,
+      {
+        expectedPromptMessageID: "current-user",
+        expectedArtifactKind: "thinker_raw_verdict",
+      },
+    )).rejects.toThrow("Structured reviewer response does not satisfy the thinker v2 verdict schema")
+  })
+
+  test("thinker v2 structured output rejects an invalid verdict field", async () => {
+    const sessionID = "structured-invalid-thinker-v2-verdict-test"
+    resetMessageCursor(sessionID)
+    const messages = [
+      {
+        info: { id: "assistant-final", role: "assistant", parentID: "current-user", time: { created: 1 } },
+        parts: [{
+          type: "text",
+          text: JSON.stringify({
+            schema_version: 1,
+            artifact_kind: "thinker_raw_verdict",
+            role: "momus",
+            role_verdict: "approve",
+            candidate_plan_sha256: "not-a-sha256",
+            context_manifest_sha256: "b".repeat(64),
+            claim_verdicts: [],
+            new_claim_candidates: [],
+            evidence_refs: [],
+            findings: [],
+          }),
+        }],
+      },
+    ]
+
+    await expect(processMessages(
+      sessionID,
+      createContext(messages) as never,
+      {
+        expectedPromptMessageID: "current-user",
+        expectedArtifactKind: "thinker_raw_verdict",
+      },
+    )).rejects.toThrow("candidate_plan_sha256")
+  })
+
+  test("thinker v2 verdict enforces conditional and strict fields", () => {
+    expect(() => assertThinkerV2Verdict({
+      ...createThinkerV2Verdict(),
+      reviewer_instance_id: "explore-primary",
+    })).toThrow("reviewer_instance_id is only supported for explore")
+    expect(() => assertThinkerV2Verdict({
+      ...createThinkerV2Verdict(),
+      unexpected: true,
+    })).toThrow("Unrecognized key")
+    expect(() => assertThinkerV2Verdict({
+      ...createThinkerV2Verdict(),
+      claim_verdicts: [{
+        ...createThinkerV2Verdict().claim_verdicts[0],
+        unexpected: true,
+      }],
+    })).toThrow("Unrecognized key")
+  })
+
+  test("thinker v2 verdict rejects provider keys without scanning values", () => {
+    expect(() => assertThinkerV2Verdict({
+      ...createThinkerV2Verdict(),
+      findings: [{ api_key: "redacted" }],
+    })).toThrow("provider configuration field api_key is forbidden")
+    expect(() => assertThinkerV2Verdict({
+      ...createThinkerV2Verdict(),
+      findings: ["No api_key was supplied."],
+    })).not.toThrow()
   })
 
   test("ordinary output keeps the existing combined message behavior", async () => {
