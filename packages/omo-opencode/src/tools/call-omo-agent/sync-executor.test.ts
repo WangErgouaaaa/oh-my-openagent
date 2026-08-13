@@ -172,6 +172,70 @@ describe("executeSync", () => {
     expect(promptInput?.body.system).toContain("Do not emit XML")
   })
 
+  test("#given thinker v2 mode #when dispatching the reviewer #then OpenCode enforces the complete verdict contract", async () => {
+    //#given
+    const executeSync = await importExecuteSync()
+    const deps = createDependencies()
+    const toolContext = createToolContext()
+    const recorder = createPromptAsyncRecorder(async (input) => ({
+      data: { info: { parentID: input.body.messageID } },
+    }))
+
+    //#when
+    await executeSync(
+      {
+        subagent_type: "momus",
+        description: "structured review",
+        prompt: "Return the full reviewer verdict.",
+        response_mode: "thinker_v2",
+        run_in_background: false,
+      },
+      toolContext,
+      createContext(recorder.promptAsync) as never,
+      deps,
+    )
+
+    //#then
+    const format = recorder.getCapturedInput()?.body.format as {
+      schema?: {
+        additionalProperties?: boolean
+        properties?: Record<string, unknown>
+        required?: string[]
+      }
+    }
+    expect(format.schema?.additionalProperties).toBe(false)
+    expect(format.schema?.required).toEqual([
+      "schema_version",
+      "artifact_kind",
+      "role",
+      "role_verdict",
+      "candidate_plan_sha256",
+      "context_manifest_sha256",
+      "claim_verdicts",
+      "new_claim_candidates",
+      "evidence_refs",
+      "findings",
+    ])
+    expect(format.schema?.properties).toMatchObject({
+      schema_version: { const: 1 },
+      artifact_kind: { const: "thinker_raw_verdict" },
+      role: { enum: ["explore", "momus", "oracle", "librarian"] },
+      reviewer_instance_id: { pattern: "^explore-(?:primary|secondary-[1-9][0-9]*)$" },
+      role_verdict: { enum: ["approve", "revise", "block"] },
+      candidate_plan_sha256: { pattern: "^[0-9a-f]{64}$" },
+      context_manifest_sha256: { pattern: "^[0-9a-f]{64}$" },
+      claim_verdicts: {
+        items: {
+          additionalProperties: false,
+          required: ["claim_id", "verdict", "confidence", "evidence_refs", "reason"],
+        },
+      },
+      new_claim_candidates: { type: "array" },
+      evidence_refs: { type: "array" },
+      findings: { type: "array" },
+    })
+  })
+
   test("uses the bound structured prompt response without reopening broken session history", async () => {
     const executeSync = await importExecuteSync()
     const structured = {

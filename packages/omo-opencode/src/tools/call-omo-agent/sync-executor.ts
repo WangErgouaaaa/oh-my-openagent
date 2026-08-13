@@ -16,6 +16,7 @@ import { deleteSessionTools, setSessionTools } from "../../shared/session-tools-
 import { captureMessageBaseline, waitForCompletion } from "./completion-poller"
 import { processMessages } from "./message-processor"
 import { createOrGetSession } from "./session-creator"
+import { THINKER_V2_VERDICT_JSON_SCHEMA } from "./thinker-v2-verdict-schema"
 import type { CallOmoAgentArgs, StructuredReviewResponseMode } from "./types"
 
 type SessionWithPrompt = {
@@ -189,23 +190,27 @@ export async function executeSync(
           "The caller selected a strict structured reviewer response mode.",
           "This contract overrides the agent's default final response format.",
           "Complete the requested review, then use StructuredOutput exactly once for the final response.",
-          "The StructuredOutput schema enforces transport only; include every field required by the caller prompt.",
+          structuredReviewProtocol.expectedArtifactKind === "thinker_raw_verdict"
+            ? "The StructuredOutput schema enforces the complete Thinker v2 verdict contract."
+            : "The StructuredOutput schema enforces transport only; include every field required by the caller prompt.",
           "Do not emit XML, Markdown, code fences, analysis, or a plain-text final response.",
         ].join("\n")
       : undefined
     const structuredReviewFormat = structuredReviewProtocol
       ? {
           type: "json_schema",
-          schema: {
-            type: "object",
-            properties: {
-              artifact_kind: {
-                type: "string",
-                enum: [structuredReviewProtocol.expectedArtifactKind],
+          schema: structuredReviewProtocol.expectedArtifactKind === "thinker_raw_verdict"
+            ? THINKER_V2_VERDICT_JSON_SCHEMA
+            : {
+                type: "object",
+                properties: {
+                  artifact_kind: {
+                    type: "string",
+                    enum: [structuredReviewProtocol.expectedArtifactKind],
+                  },
+                },
+                required: ["artifact_kind"],
               },
-            },
-            required: ["artifact_kind"],
-          },
         }
       : undefined
     const promptModel = structuredReviewProtocol && model?.providerID === "deepseek"
