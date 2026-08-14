@@ -77,6 +77,15 @@ beforeEach(() => {
 })
 
 describe("createCallOmoAgent", () => {
+  test("tool argument schemas treat proven host empty-string sentinels as absent", () => {
+    const toolDef = createCallOmoAgent(createMockCtx(DEFAULT_AGENTS), mockBackgroundManager, [])
+    const args = toolDef.args as Record<string, { parse: (value: unknown) => unknown }>
+
+    for (const field of ["prompt_file", "prompt_sha256", "session_id", "response_mode"]) {
+      expect(args[field].parse("")).toBeUndefined()
+    }
+  })
+
   describe("disabled_agents validation", () => {
     test("should reject agent in disabled_agents list", async () => {
       const mockCtx = createMockCtx(DEFAULT_AGENTS)

@@ -130,7 +130,7 @@ describe("executeSync", () => {
     expect(promptInput?.body.parts).toEqual([{ type: "text", text: "find something" }])
   })
 
-  test("#given a structured response mode #when dispatching the reviewer #then OpenCode enforces one native JSON mapping", async () => {
+  test("#given thinker v21 mode #when dispatching Explore #then OpenCode enforces the complete role-bound verdict contract", async () => {
     //#given
     const executeSync = await importExecuteSync()
     const deps = createDependencies()
@@ -154,22 +154,75 @@ describe("executeSync", () => {
     )
 
     //#then
-    const promptInput = recorder.getCapturedInput()
-    expect(promptInput?.body.format).toEqual({
-      type: "json_schema",
-      schema: {
-        type: "object",
-        properties: {
-          artifact_kind: {
-            type: "string",
-            enum: ["thinker_raw_verdict_v21"],
-          },
-        },
-        required: ["artifact_kind"],
-      },
+    const format = recorder.getCapturedInput()?.body.format as {
+      schema?: {
+        additionalProperties?: boolean
+        properties?: Record<string, {
+          const?: unknown
+          type?: string
+          pattern?: string
+          items?: {
+            oneOf?: Array<{
+              additionalProperties?: boolean | Record<string, never>
+              properties?: Record<string, unknown>
+              required?: string[]
+            }>
+          }
+        }>
+        required?: string[]
+      }
+    }
+    expect(format.schema?.additionalProperties).toBe(false)
+    expect(format.schema?.required).toEqual([
+      "schema_version",
+      "artifact_kind",
+      "role",
+      "snapshot_id",
+      "context_hash",
+      "status",
+      "claim_findings",
+      "registry_gaps",
+      "new_load_bearing_claims",
+      "missing_assumptions",
+      "context_requests",
+    ])
+    expect(format.schema?.properties).toMatchObject({
+      schema_version: { const: "2.1" },
+      artifact_kind: { const: "thinker_raw_verdict_v21" },
+      role: { const: "explore" },
+      snapshot_id: { type: "string" },
+      context_hash: { pattern: "^[0-9a-f]{64}$" },
+      status: { type: "string" },
+      claim_findings: { type: "array" },
+      registry_gaps: { type: "array" },
+      new_load_bearing_claims: { type: "array" },
+      missing_assumptions: { type: "array" },
+      context_requests: { type: "array" },
     })
+    const findingBranches = format.schema?.properties?.claim_findings?.items?.oneOf
+    expect(findingBranches).toHaveLength(4)
+    expect(findingBranches).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          properties: expect.objectContaining({
+            assessment: { type: "string", const: "contradicted" },
+            required_action: { type: "string", pattern: "\\S" },
+          }),
+          required: expect.arrayContaining(["required_action"]),
+        }),
+        expect.objectContaining({
+          properties: expect.objectContaining({
+            assessment: { type: "string", const: "insufficient_evidence" },
+            required_action: { type: "string", pattern: "\\S" },
+          }),
+          required: expect.arrayContaining(["required_action"]),
+        }),
+      ]),
+    )
+    const promptInput = recorder.getCapturedInput()
     expect(promptInput?.body.system).toContain("overrides the agent's default final response format")
-    expect(promptInput?.body.system).toContain("Do not emit XML")
+    expect(promptInput?.body.system).toContain("complete Thinker v2.1 verdict contract")
+    expect(promptInput?.body.tools).toEqual({ "*": false, StructuredOutput: true })
   })
 
   test("#given thinker v2 mode #when dispatching the reviewer #then OpenCode enforces the complete verdict contract", async () => {
@@ -325,9 +378,101 @@ describe("executeSync", () => {
       providerID: "deepseek",
       modelID: "deepseek-v4-flash",
     })
-    expect(promptInput?.body.variant).toBeUndefined()
+    expect(promptInput?.body.variant).toBe("default")
     expect(promptInput?.body.options).toEqual({
       thinking: { type: "disabled" },
+    })
+  })
+
+  test("#given a DeepSeek model routed through a non-deepseek provider #when dispatching a structured reviewer #then it keeps the routed model identity but disables incompatible thinking", async () => {
+    //#given - R037: opencode-go/deepseek-v4-flash/variant=max reached the provider with
+    // thinking enabled and the provider rejected the json_schema tool_choice before generation
+    const executeSync = await importExecuteSync()
+    const deps = createDependencies()
+    const toolContext = createToolContext()
+    const recorder = createPromptAsyncRecorder(async (input) => ({
+      data: { info: { parentID: input.body.messageID } },
+    }))
+    const model = {
+      providerID: "opencode-go",
+      modelID: "deepseek-v4-flash",
+      variant: "max",
+      reasoningEffort: "xhigh",
+      thinking: { type: "enabled" as const },
+    }
+
+    //#when
+    await executeSync(
+      {
+        subagent_type: "explore",
+        description: "structured review",
+        prompt: "Return the full reviewer verdict.",
+        response_mode: "thinker_v21",
+        run_in_background: false,
+      },
+      toolContext,
+      createContext(recorder.promptAsync) as never,
+      deps,
+      undefined,
+      undefined,
+      model,
+    )
+
+    //#then
+    const promptInput = recorder.getCapturedInput()
+    expect(promptInput?.body.model).toEqual({
+      providerID: "opencode-go",
+      modelID: "deepseek-v4-flash",
+    })
+    expect(promptInput?.body.variant).toBe("default")
+    expect(promptInput?.body.options).toEqual({
+      thinking: { type: "disabled" },
+    })
+  })
+
+  test("#given a Kimi model routed through opencode-go #when dispatching a structured reviewer #then it preserves the routed model configuration", async () => {
+    //#given
+    const executeSync = await importExecuteSync()
+    const deps = createDependencies()
+    const toolContext = createToolContext()
+    const recorder = createPromptAsyncRecorder(async (input) => ({
+      data: { info: { parentID: input.body.messageID } },
+    }))
+    const model = {
+      providerID: "opencode-go",
+      modelID: "kimi-k2.7-code",
+      variant: "max",
+      reasoningEffort: "xhigh",
+      thinking: { type: "enabled" as const },
+    }
+
+    //#when
+    await executeSync(
+      {
+        subagent_type: "explore",
+        description: "structured review",
+        prompt: "Return the full reviewer verdict.",
+        response_mode: "thinker_v21",
+        run_in_background: false,
+      },
+      toolContext,
+      createContext(recorder.promptAsync) as never,
+      deps,
+      undefined,
+      undefined,
+      model,
+    )
+
+    //#then
+    const promptInput = recorder.getCapturedInput()
+    expect(promptInput?.body.model).toEqual({
+      providerID: "opencode-go",
+      modelID: "kimi-k2.7-code",
+    })
+    expect(promptInput?.body.variant).toBe("max")
+    expect(promptInput?.body.options).toEqual({
+      reasoningEffort: "xhigh",
+      thinking: { type: "enabled" },
     })
   })
 

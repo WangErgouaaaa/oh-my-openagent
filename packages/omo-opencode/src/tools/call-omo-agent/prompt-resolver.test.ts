@@ -50,6 +50,20 @@ describe("resolveCallOmoPrompt", () => {
     expect(result).toBe("direct prompt")
   })
 
+  test("#given an empty host-injected digest with a literal prompt #then it treats the optional digest as absent", () => {
+    const result = resolveCallOmoPromptWithReceipt(
+      {
+        prompt: "direct prompt",
+        prompt_file: "",
+        prompt_sha256: "",
+      },
+      { workspaceDirectory: workspaceRoot, externalAllowedRoots: [] },
+    )
+
+    expect(result.prompt).toBe("direct prompt")
+    expect(result.receipt.source).toBe("literal")
+  })
+
   test("#given a workspace prompt file with a matching digest #then it loads the frozen prompt", () => {
     const promptPath = join(workspaceRoot, "review.md")
     const prompt = "\uFEFFfrozen workspace prompt ✓"

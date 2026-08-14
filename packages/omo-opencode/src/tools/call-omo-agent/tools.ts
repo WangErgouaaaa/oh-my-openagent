@@ -152,18 +152,21 @@ export function createCallOmoAgent(
         .string()
         .describe("Literal task prompt. Provide exactly one of prompt or prompt_file.")
         .optional(),
-      prompt_file: tool.schema
-        .string()
-        .describe("Absolute UTF-8 prompt file under an approved root. Requires prompt_sha256.")
-        .optional(),
-      prompt_sha256: tool.schema
-        .string()
-        .describe("Expected SHA-256 hexadecimal digest for prompt_file.")
-        .optional(),
-      response_mode: tool.schema
-        .enum(STRUCTURED_REVIEW_RESPONSE_MODES)
-        .describe("Optional strict reviewer result contract. thinker_v2 is for Momus or Oracle; thinker_v21 also allows Explore.")
-        .optional(),
+      prompt_file: tool.schema.preprocess(
+        (value) => value === "" ? undefined : value,
+        tool.schema.string().optional(),
+      )
+        .describe("Absolute UTF-8 prompt file under an approved root. Requires prompt_sha256."),
+      prompt_sha256: tool.schema.preprocess(
+        (value) => value === "" ? undefined : value,
+        tool.schema.string().optional(),
+      )
+        .describe("Expected SHA-256 hexadecimal digest for prompt_file."),
+      response_mode: tool.schema.preprocess(
+        (value) => value === "" ? undefined : value,
+        tool.schema.enum(STRUCTURED_REVIEW_RESPONSE_MODES).optional(),
+      )
+        .describe("Optional strict reviewer result contract. thinker_v2 is for Momus or Oracle; thinker_v21 also allows Explore."),
       subagent_type: tool.schema
         .string()
         .describe(
@@ -174,10 +177,11 @@ export function createCallOmoAgent(
         .describe(
           "REQUIRED. true: run asynchronously (use background_output to get results), false: run synchronously and wait for completion",
         ),
-      session_id: tool.schema
-        .string()
-        .describe("Existing Task session to continue")
-        .optional(),
+      session_id: tool.schema.preprocess(
+        (value) => value === "" ? undefined : value,
+        tool.schema.string().optional(),
+      )
+        .describe("Existing Task session to continue"),
     },
     async execute(args: CallOmoAgentToolArgs, toolContext) {
       const toolCtx = toolContext as ToolContextWithMetadata;
