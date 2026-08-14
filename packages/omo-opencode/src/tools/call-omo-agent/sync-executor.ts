@@ -1,4 +1,5 @@
 import type { PluginInput } from "@opencode-ai/plugin"
+import { detectHeuristicModelFamily } from "@oh-my-opencode/model-core"
 import { abortWithTimeout } from "../../features/background-agent/abort-with-timeout"
 import { clearSessionAgent, handedBackSyncSessions, setSessionAgent, subagentSessions, syncSubagentSessions } from "../../features/claude-code-session-state"
 import { generateMessageId } from "../../features/hook-message-injector/id-generation"
@@ -17,6 +18,10 @@ import { captureMessageBaseline, waitForCompletion } from "./completion-poller"
 import { processMessages } from "./message-processor"
 import { createOrGetSession } from "./session-creator"
 import { THINKER_V2_VERDICT_JSON_SCHEMA } from "./thinker-v2-verdict-schema"
+import {
+  buildThinkerV21VerdictJsonSchema,
+  type ThinkerV21ReviewerRole,
+} from "./thinker-v21-verdict-schema"
 import type { CallOmoAgentArgs, StructuredReviewResponseMode } from "./types"
 
 type SessionWithPrompt = {
@@ -100,7 +105,10 @@ function resolveStructuredReviewProtocol(args: CallOmoAgentArgs) {
       `response_mode ${args.response_mode} is only supported by ${protocol.allowedAgents.join(", ")}.`,
     )
   }
-  return protocol
+  return {
+    ...protocol,
+    expectedReviewerRole: args.subagent_type.toLowerCase() as ThinkerV21ReviewerRole,
+  }
 }
 
 function promptReceiptMetadata(args: CallOmoAgentArgs): Record<string, unknown> {
@@ -192,7 +200,7 @@ export async function executeSync(
           "Complete the requested review, then use StructuredOutput exactly once for the final response.",
           structuredReviewProtocol.expectedArtifactKind === "thinker_raw_verdict"
             ? "The StructuredOutput schema enforces the complete Thinker v2 verdict contract."
-            : "The StructuredOutput schema enforces transport only; include every field required by the caller prompt.",
+            : "The StructuredOutput schema enforces the complete Thinker v2.1 verdict contract.",
           "Do not emit XML, Markdown, code fences, analysis, or a plain-text final response.",
         ].join("\n")
       : undefined
@@ -201,19 +209,16 @@ export async function executeSync(
           type: "json_schema",
           schema: structuredReviewProtocol.expectedArtifactKind === "thinker_raw_verdict"
             ? THINKER_V2_VERDICT_JSON_SCHEMA
-            : {
-                type: "object",
-                properties: {
-                  artifact_kind: {
-                    type: "string",
-                    enum: [structuredReviewProtocol.expectedArtifactKind],
-                  },
-                },
-                required: ["artifact_kind"],
-              },
+            : buildThinkerV21VerdictJsonSchema(
+                structuredReviewProtocol.expectedReviewerRole,
+              ),
         }
       : undefined
-    const promptModel = structuredReviewProtocol && model?.providerID === "deepseek"
+    const modelFamily = model ? detectHeuristicModelFamily(model.modelID) : undefined
+    const needsStructuredThinkingDisabled = structuredReviewProtocol
+      && model !== undefined
+      && modelFamily?.family === "deepseek"
+    const promptModel = needsStructuredThinkingDisabled
       ? {
           ...model,
           variant: undefined,
@@ -252,7 +257,9 @@ export async function executeSync(
     log(`[call_omo_agent] Prompt text:`, args.prompt.substring(0, 100))
     const normalizedSubagentType = stripAgentListSortPrefix(args.subagent_type)
     const promptAgent = normalizeAgentForPrompt(normalizedSubagentType) ?? normalizedSubagentType
-    const promptTools = buildSyncPromptTools(normalizedSubagentType)
+    const promptTools = structuredReviewFormat
+      ? { "*": false, StructuredOutput: true }
+      : buildSyncPromptTools(normalizedSubagentType)
     setSessionAgent(sessionID, promptAgent)
     setSessionTools(sessionID, promptTools)
     registerDelegatedChildSessionBootstrap({
@@ -288,7 +295,8 @@ export async function executeSync(
             tools: promptTools,
             parts: [{ type: "text", text: args.prompt }],
             ...(promptModel ? { model: { providerID: promptModel.providerID, modelID: promptModel.modelID } } : {}),
-            ...(promptModel?.variant ? { variant: promptModel.variant } : {}),
+            // OpenCode reapplies the agent variant when this field is omitted.
+            ...(needsStructuredThinkingDisabled ? { variant: "default" } : promptModel?.variant ? { variant: promptModel.variant } : {}),
             ...buildPromptGenerationParams(promptModel),
           },
         },
@@ -355,6 +363,7 @@ export async function executeSync(
         baselineMessageKeys,
         expectedPromptMessageID: promptMessageID,
         expectedArtifactKind: structuredReviewProtocol?.expectedArtifactKind,
+        expectedReviewerRole: structuredReviewProtocol?.expectedReviewerRole,
         ...(promptResponse !== undefined ? { promptResponse } : {}),
       })
 

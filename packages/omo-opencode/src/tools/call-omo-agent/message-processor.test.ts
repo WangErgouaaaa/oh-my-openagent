@@ -36,6 +36,56 @@ function createThinkerV2Verdict() {
   }
 }
 
+function createThinkerV21Verdict(role = "explore") {
+  return {
+    schema_version: "2.1",
+    artifact_kind: "thinker_raw_verdict_v21",
+    role,
+    snapshot_id: "implementation-r001",
+    context_hash: "c".repeat(64),
+    status: "completed",
+    claim_findings: [{
+      finding_id: `F-${role}-001`,
+      claim_id: "C-001",
+      assessment: "supported",
+      severity: "major",
+      evidence_refs: ["src/example.ts:1"],
+      reasoning: "The cited implementation supports the claim.",
+      recheck_required: false,
+    }],
+    registry_gaps: [],
+    new_load_bearing_claims: [],
+    missing_assumptions: [],
+    context_requests: [],
+  }
+}
+
+async function processThinkerV21Verdict(
+  verdict: unknown,
+  expectedReviewerRole = "explore",
+): Promise<string> {
+  const sessionID = `structured-thinker-v21-${crypto.randomUUID()}`
+  resetMessageCursor(sessionID)
+  return processMessages(
+    sessionID,
+    createContext([{
+      info: {
+        id: "assistant-final",
+        role: "assistant",
+        parentID: "current-user",
+        time: { created: 1 },
+        structured: verdict,
+      },
+      parts: [],
+    }]) as never,
+    {
+      expectedPromptMessageID: "current-user",
+      expectedArtifactKind: "thinker_raw_verdict_v21",
+      expectedReviewerRole,
+    } as never,
+  )
+}
+
 describe("processMessages", () => {
   test("structured output returns only the final assistant text", async () => {
     const sessionID = "structured-message-processor-test"
@@ -71,11 +121,7 @@ describe("processMessages", () => {
   test("structured output reads the native StructuredOutput result without a text wrapper", async () => {
     const sessionID = "structured-native-result-test"
     resetMessageCursor(sessionID)
-    const structured = {
-      artifact_kind: "thinker_raw_verdict_v21",
-      role: "explore",
-      status: "completed",
-    }
+    const structured = createThinkerV21Verdict()
     const messages = [
       {
         info: {
@@ -106,10 +152,7 @@ describe("processMessages", () => {
   })
 
   test("structured output can use the bound prompt response without fetching session history", async () => {
-    const structured = {
-      artifact_kind: "thinker_raw_verdict_v21",
-      role: "explore",
-    }
+    const structured = createThinkerV21Verdict()
     const context = {
       client: {
         session: {
@@ -244,7 +287,7 @@ describe("processMessages", () => {
         expectedPromptMessageID: "current-user",
         expectedArtifactKind: "thinker_raw_verdict_v21",
       },
-    )).rejects.toThrow("must declare artifact_kind thinker_raw_verdict_v21")
+    )).rejects.toThrow("exactly one final assistant response")
   })
 
   test("structured output rejects a native result mixed with a malformed JSON fence", async () => {
@@ -276,7 +319,7 @@ describe("processMessages", () => {
         expectedPromptMessageID: "current-user",
         expectedArtifactKind: "thinker_raw_verdict_v21",
       },
-    )).rejects.toThrow("must be one JSON mapping")
+    )).rejects.toThrow("exactly one final assistant response")
   })
 
   test("structured output rejects two text results when either result is invalid", async () => {
@@ -306,13 +349,13 @@ describe("processMessages", () => {
         expectedPromptMessageID: "current-user",
         expectedArtifactKind: "thinker_raw_verdict_v21",
       },
-    )).rejects.toThrow("must declare artifact_kind thinker_raw_verdict_v21")
+    )).rejects.toThrow("exactly one final assistant response")
   })
 
   test("structured output extracts one JSON mapping from a native agent wrapper", async () => {
     const sessionID = "structured-native-wrapper-test"
     resetMessageCursor(sessionID)
-    const finalJson = '{"artifact_kind":"thinker_raw_verdict_v21","role":"explore"}'
+    const finalJson = JSON.stringify(createThinkerV21Verdict())
     const messages = [
       {
         info: { id: "assistant-final", role: "assistant", parentID: "current-user", time: { created: 1 } },
@@ -598,6 +641,92 @@ describe("processMessages", () => {
       ...createThinkerV2Verdict(),
       findings: ["No api_key was supplied."],
     })).not.toThrow()
+  })
+
+  test("thinker v21 rejects every malformed maintained top-level field", async () => {
+    const valid = createThinkerV21Verdict()
+    const cases: Array<[string, Record<string, unknown>]> = [
+      ["schema_version", { ...valid, schema_version: 1 }],
+      ["snapshot_id", { ...valid, snapshot_id: "" }],
+      ["context_hash", { ...valid, context_hash: "C".repeat(64) }],
+      ["status", { ...valid, status: "approve" }],
+      ["claim_findings", { ...valid, claim_findings: null }],
+      ["registry_gaps", { ...valid, registry_gaps: null }],
+      ["new_load_bearing_claims", { ...valid, new_load_bearing_claims: null }],
+      ["missing_assumptions", { ...valid, missing_assumptions: null }],
+      ["context_requests", { ...valid, context_requests: null }],
+    ]
+
+    for (const [field, verdict] of cases) {
+      await expect(processThinkerV21Verdict(verdict)).rejects.toThrow(field)
+    }
+  })
+
+  test("thinker v21 rejects every malformed maintained claim finding field", async () => {
+    const valid = createThinkerV21Verdict()
+    const finding = valid.claim_findings[0]
+    const cases: Array<[string, unknown]> = [
+      ["claim_findings", null],
+      ["finding_id", { ...finding, finding_id: "" }],
+      ["claim_id", { ...finding, claim_id: "" }],
+      ["assessment", { ...finding, assessment: "partially_supported" }],
+      ["severity", { ...finding, severity: "high" }],
+      ["evidence_refs", { ...finding, evidence_refs: "src/example.ts:1" }],
+      ["required_action", { ...finding, assessment: "contradicted" }],
+      ["required_action", {
+        ...finding,
+        assessment: "insufficient_evidence",
+        required_action: "",
+      }],
+    ]
+
+    for (const [field, malformedFinding] of cases) {
+      await expect(processThinkerV21Verdict({
+        ...valid,
+        claim_findings: [malformedFinding],
+      })).rejects.toThrow(field)
+    }
+  })
+
+  test("thinker v21 binds the returned role to the dispatched reviewer", async () => {
+    await expect(processThinkerV21Verdict(
+      createThinkerV21Verdict("explore"),
+      "momus",
+    )).rejects.toThrow("role")
+  })
+
+  test("thinker v21 accepts maintained optional and unknown compatibility fields", async () => {
+    const valid = createThinkerV21Verdict()
+    const verdict = {
+      ...valid,
+      future_top_level_field: { retained_by_launcher_evidence: true },
+      claim_findings: [{
+        ...valid.claim_findings[0],
+        required_action: "",
+        future_finding_field: ["compatible"],
+      }],
+    }
+
+    await expect(processThinkerV21Verdict(verdict)).resolves.toBe(JSON.stringify(verdict))
+  })
+
+  test("thinker v21 verdict rejects provider config key leakage", async () => {
+    const valid = createThinkerV21Verdict()
+    await expect(processThinkerV21Verdict({
+      ...valid,
+      new_load_bearing_claims: [{ api_key: "redacted" }],
+    })).rejects.toThrow("provider configuration field api_key is forbidden")
+    await expect(processThinkerV21Verdict({
+      ...valid,
+      new_load_bearing_claims: [{ base_url: "https://example.com" }],
+    })).rejects.toThrow("provider configuration field base_url is forbidden")
+    await expect(processThinkerV21Verdict({
+      ...valid,
+      registry_gaps: ["No api_key was supplied."],
+    })).resolves.toBe(JSON.stringify({
+      ...valid,
+      registry_gaps: ["No api_key was supplied."],
+    }))
   })
 
   test("ordinary output keeps the existing combined message behavior", async () => {

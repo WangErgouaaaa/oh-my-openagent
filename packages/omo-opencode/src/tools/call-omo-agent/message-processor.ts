@@ -2,6 +2,10 @@ import type { PluginInput } from "@opencode-ai/plugin"
 import { log } from "../../shared"
 import { buildMessageKey, consumeNewMessages } from "../../shared/session-cursor"
 import { assertThinkerV2Verdict } from "./thinker-v2-verdict-schema"
+import {
+  assertThinkerV21Verdict,
+  type ThinkerV21ReviewerRole,
+} from "./thinker-v21-verdict-schema"
 
 interface SDKMessage {
   info?: {
@@ -18,6 +22,7 @@ export interface ProcessMessagesOptions {
   baselineMessageKeys?: ReadonlySet<string>
   expectedPromptMessageID?: string
   expectedArtifactKind?: "thinker_raw_verdict" | "thinker_raw_verdict_v21"
+  expectedReviewerRole?: ThinkerV21ReviewerRole
   promptResponse?: unknown
 }
 
@@ -58,6 +63,7 @@ function containsJsonMapping(text: string): boolean {
 function normalizeStructuredReviewResponse(
   responseText: string,
   expectedArtifactKind: NonNullable<ProcessMessagesOptions["expectedArtifactKind"]>,
+  expectedReviewerRole?: ThinkerV21ReviewerRole,
 ): string {
   if (responseText.length > MAX_STRUCTURED_REVIEW_RESPONSE_CHARS) {
     throw new Error(`Structured reviewer response exceeds ${MAX_STRUCTURED_REVIEW_RESPONSE_CHARS} characters.`)
@@ -91,6 +97,8 @@ function normalizeStructuredReviewResponse(
   }
   if (expectedArtifactKind === "thinker_raw_verdict") {
     assertThinkerV2Verdict(parsed)
+  } else {
+    assertThinkerV21Verdict(parsed, expectedReviewerRole)
   }
   return candidate
 }
@@ -198,20 +206,28 @@ export async function processMessages(
       || /```json\b/i.test(responseText)
       || containsJsonMapping(responseText)
     )
-    const normalizedTextResponses = structuredTextResponses.map((responseText) =>
-      normalizeStructuredReviewResponse(responseText, expectedArtifactKind)
-    )
     if (
       nativeResponses.length > 1
-      || normalizedTextResponses.length > 1
-      || (nativeResponses.length === 1 && normalizedTextResponses.length === 1)
+      || structuredTextResponses.length > 1
+      || (nativeResponses.length === 1 && structuredTextResponses.length === 1)
     ) {
       throw new Error("Structured reviewer response must contain exactly one final assistant response.")
     }
+    const normalizedTextResponses = structuredTextResponses.map((responseText) =>
+      normalizeStructuredReviewResponse(
+        responseText,
+        expectedArtifactKind,
+        options.expectedReviewerRole,
+      )
+    )
 
     const responseText = nativeResponses[0] ?? normalizedTextResponses[0] ?? textResponses.at(-1)!
     log(`[call_omo_agent] Got final assistant response, length: ${responseText.length}`)
-    return normalizeStructuredReviewResponse(responseText, expectedArtifactKind)
+    return normalizeStructuredReviewResponse(
+      responseText,
+      expectedArtifactKind,
+      options.expectedReviewerRole,
+    )
   }
 
   // Extract content from ALL messages, not just the last one

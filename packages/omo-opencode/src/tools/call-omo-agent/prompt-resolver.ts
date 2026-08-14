@@ -212,7 +212,7 @@ export function resolveCallOmoPromptWithReceipt(
   }
 
   if (hasLiteralPrompt) {
-    if (input.prompt_sha256 !== undefined) {
+    if (input.prompt_sha256 !== undefined && input.prompt_sha256 !== "") {
       throw new Error("prompt_sha256 is only valid with prompt_file.")
     }
     const prompt = input.prompt as string
