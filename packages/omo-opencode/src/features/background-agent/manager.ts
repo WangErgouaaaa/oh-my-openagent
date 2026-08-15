@@ -2476,7 +2476,6 @@ The task was re-queued on a fallback model after a retryable failure.
     this.pollingInterval = setInterval(() => {
       this.pollRunningTasks()
     }, POLLING_INTERVAL_MS)
-    this.pollingInterval.unref()
   }
 
   private stopPolling(): void {
