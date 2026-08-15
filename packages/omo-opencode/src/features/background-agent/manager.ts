@@ -1223,10 +1223,10 @@ The fallback retry session is now created and can be inspected directly.
       if (existingTask.sessionId) {
         subagentSessions.add(existingTask.sessionId)
       }
-      this.startPolling()
 
       // Track for batched notifications if task is pending or running
       if (existingTask.status === "pending" || existingTask.status === "running") {
+        this.startPolling()
         const pending = this.pendingByParent.get(input.parentSessionId) ?? new Set()
         pending.add(existingTask.id)
         this.pendingByParent.set(input.parentSessionId, pending)
@@ -2476,7 +2476,6 @@ The task was re-queued on a fallback model after a retryable failure.
     this.pollingInterval = setInterval(() => {
       this.pollRunningTasks()
     }, POLLING_INTERVAL_MS)
-    this.pollingInterval.unref()
   }
 
   private stopPolling(): void {

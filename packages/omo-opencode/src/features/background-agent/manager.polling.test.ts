@@ -70,6 +70,73 @@ describe("BackgroundManager polling overlap", () => {
     expect(maxActiveCalls).toBe(1)
     expect(statusCallCount).toBe(1)
   })
+
+  test("keeps the headless process alive until every running task finishes", async () => {
+    //#given
+    const manager = createManagerWithStatus(async () => ({
+      data: {
+        "ses-delayed": { type: "busy" },
+      },
+    }))
+
+    try {
+      const fastTask = await manager.trackTask({
+        taskId: "task-fast",
+        sessionId: "ses-fast",
+        parentSessionId: "parent-session",
+        description: "fast task",
+      })
+      const delayedTask = await manager.trackTask({
+        taskId: "task-delayed",
+        sessionId: "ses-delayed",
+        parentSessionId: "parent-session",
+        description: "delayed task",
+      })
+
+      //#when
+      expect(manager["pollingInterval"]?.hasRef()).toBe(true)
+      fastTask.status = "completed"
+      await manager["pollRunningTasks"]()
+
+      //#then
+      expect(fastTask.status).toBe("completed")
+      expect(delayedTask.status).toBe("running")
+      expect(manager["pollingInterval"]?.hasRef()).toBe(true)
+
+      //#when
+      delayedTask.status = "completed"
+      await manager["pollRunningTasks"]()
+
+      //#then
+      expect(delayedTask.status).toBe("completed")
+      expect(manager["pollingInterval"]).toBeUndefined()
+    } finally {
+      await manager.shutdown()
+    }
+  })
+
+  test("does not start polling when duplicate tracking an existing terminal task", async () => {
+    //#given
+    const manager = createManagerWithStatus(async () => ({ data: {} }))
+    const task = createRunningTask("ses-terminal")
+    task.status = "completed"
+    injectTask(manager, task)
+
+    try {
+      //#when
+      await manager.trackTask({
+        taskId: task.id,
+        sessionId: "ses-terminal",
+        parentSessionId: "parent-session",
+        description: "terminal task",
+      })
+
+      //#then
+      expect(manager["pollingInterval"]).toBeUndefined()
+    } finally {
+      await manager.shutdown()
+    }
+  })
 })
 
 
