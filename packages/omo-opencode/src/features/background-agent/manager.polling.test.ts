@@ -114,6 +114,29 @@ describe("BackgroundManager polling overlap", () => {
       await manager.shutdown()
     }
   })
+
+  test("does not start polling when duplicate tracking an existing terminal task", async () => {
+    //#given
+    const manager = createManagerWithStatus(async () => ({ data: {} }))
+    const task = createRunningTask("ses-terminal")
+    task.status = "completed"
+    injectTask(manager, task)
+
+    try {
+      //#when
+      await manager.trackTask({
+        taskId: task.id,
+        sessionId: "ses-terminal",
+        parentSessionId: "parent-session",
+        description: "terminal task",
+      })
+
+      //#then
+      expect(manager["pollingInterval"]).toBeUndefined()
+    } finally {
+      await manager.shutdown()
+    }
+  })
 })
 
 
