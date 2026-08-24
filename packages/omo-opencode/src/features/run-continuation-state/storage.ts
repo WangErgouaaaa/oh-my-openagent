@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
-import { join } from "node:path"
+import { isAbsolute, join } from "node:path"
 import { CONTINUATION_MARKER_DIR } from "./constants"
 import type {
   ContinuationMarker,
@@ -7,8 +7,15 @@ import type {
   ContinuationMarkerState,
 } from "./types"
 
+function resolveMarkerRoot(directory: string): string {
+  const stateRoot = process.env.OMO_RUN_CONTINUATION_STATE_ROOT
+  return stateRoot && isAbsolute(stateRoot)
+    ? stateRoot
+    : join(directory, CONTINUATION_MARKER_DIR)
+}
+
 function getMarkerPath(directory: string, sessionID: string): string {
-  return join(directory, CONTINUATION_MARKER_DIR, `${sessionID}.json`)
+  return join(resolveMarkerRoot(directory), `${sessionID}.json`)
 }
 
 export function readContinuationMarker(
@@ -55,7 +62,7 @@ export function setContinuationMarkerSource(
   }
 
   const markerPath = getMarkerPath(directory, sessionID)
-  mkdirSync(join(directory, CONTINUATION_MARKER_DIR), { recursive: true })
+  mkdirSync(resolveMarkerRoot(directory), { recursive: true })
   writeFileSync(markerPath, JSON.stringify(next, null, 2), "utf-8")
   return next
 }
